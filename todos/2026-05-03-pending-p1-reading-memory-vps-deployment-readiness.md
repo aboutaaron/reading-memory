@@ -3,7 +3,7 @@
 Priority: P1
 Status: code-complete-host-ops-remaining
 Source: ce:review 2026-05-03
-Plan: docs/plans/2026-05-03-feat-kazan-mini-reading-memory-plan.md
+Plan: aboutaaron/kazan-workspace:docs/plans/2026-05-03-feat-kazan-mini-reading-api-plan.md
 
 ## Finding
 V1 must deploy on the same VPS as OpenClaw, loopback-only, but the host needs readiness work before storing real reading-corpus data.

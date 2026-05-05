@@ -3,7 +3,7 @@
 Priority: P1
 Status: implemented
 Source: ce:review 2026-05-03
-Plan: docs/plans/2026-05-03-feat-kazan-mini-reading-memory-plan.md
+Plan: aboutaaron/kazan-workspace:docs/plans/2026-05-03-feat-kazan-mini-reading-api-plan.md
 
 ## Finding
 The original plan overbuilt V1 with event-sourcing, chunks, multiple ingest endpoints, and complex relationship machinery.

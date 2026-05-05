@@ -3,7 +3,7 @@
 Priority: P1
 Status: implemented
 Source: ce:review 2026-05-03
-Plan: docs/plans/2026-05-03-feat-kazan-mini-reading-memory-plan.md
+Plan: aboutaaron/kazan-workspace:docs/plans/2026-05-03-feat-kazan-mini-reading-api-plan.md
 
 ## Finding
 The API ingests hostile external content and private text/email excerpts. Security controls must be built before first deploy, not added later.

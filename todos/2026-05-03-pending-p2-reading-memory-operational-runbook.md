@@ -3,7 +3,7 @@
 Priority: P2
 Status: implemented
 Source: ce:review 2026-05-03
-Plan: docs/plans/2026-05-03-feat-kazan-mini-reading-memory-plan.md
+Plan: aboutaaron/kazan-workspace:docs/plans/2026-05-03-feat-kazan-mini-reading-api-plan.md
 
 ## Finding
 The app plan needs enough runbook material to safely operate a stateful SQLite service on the VPS.

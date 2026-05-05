@@ -3,7 +3,7 @@
 Priority: P2
 Status: implemented
 Source: ce:review 2026-05-03
-Plan: docs/plans/2026-05-03-feat-kazan-mini-reading-memory-plan.md
+Plan: aboutaaron/kazan-workspace:docs/plans/2026-05-03-feat-kazan-mini-reading-api-plan.md
 
 ## Finding
 Relationship generation can pollute the corpus or slow ingestion if treated as a hot-path graph-building task.

@@ -7,7 +7,7 @@ description: Select stored reading items that should inform a morning brief with
 
 Select stored reading items that should inform a morning brief.
 
-Prefer items that are timely, novel, and connected to Aaron's active themes:
+Prefer items that are timely, novel, and connected to the local user's configured themes, such as:
 - agent infrastructure
 - analytics agents
 - semantic layers

@@ -1,0 +1,13 @@
+[Unit]
+Description=Back up Reading Memory SQLite database
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/reading-memory
+EnvironmentFile=%h/.reading-api/env
+ExecStart=%h/reading-memory/scripts/backup-sqlite.sh
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=%h/.reading-api %h/backups/reading-memory

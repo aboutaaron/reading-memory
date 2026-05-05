@@ -2,7 +2,7 @@
 set -euo pipefail
 
 DB_PATH="${READING_API_DB:-${HOME}/.reading-api/reading.sqlite}"
-BACKUP_DIR="${READING_API_BACKUP_DIR:-${HOME}/backups/reading-api}"
+BACKUP_DIR="${READING_API_BACKUP_DIR:-${HOME}/backups/reading-memory}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 OUT="${BACKUP_DIR}/reading-${STAMP}.sqlite"
 

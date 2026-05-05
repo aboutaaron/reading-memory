@@ -1,4 +1,4 @@
-# Reading API Agent Notes
+# Reading Memory Agent Notes
 
 - V1 binds to `127.0.0.1` only and is called by a local agent over localhost with bearer auth.
 - Keep Flue imports behind `.flue/` or the analysis boundary. Store, query, HTTP, ingestion, and DB modules should remain framework-owned TypeScript.

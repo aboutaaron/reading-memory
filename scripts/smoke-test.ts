@@ -34,7 +34,7 @@ const ingest = await request('/ingest', {
     source_type: 'text',
     source: {
       text: 'Smoke test: agent memory, analytics agents, and durable evaluation should be indexed.',
-      title: 'Reading API smoke test'
+      title: 'Reading Memory smoke test'
     },
     source_context: 'smoke_test',
     ingest_reason: 'deployment_validation'

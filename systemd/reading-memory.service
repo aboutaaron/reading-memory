@@ -1,10 +1,10 @@
 [Unit]
-Description=Reading API
+Description=Reading Memory
 After=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/reading-api
+WorkingDirectory=%h/reading-memory
 EnvironmentFile=%h/.reading-api/env
 Environment=READING_API_HOST=127.0.0.1
 Environment=READING_API_PORT=4727
@@ -17,7 +17,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=read-only
-ReadWritePaths=%h/.reading-api %h/backups/reading-api %h/reading-api
+ReadWritePaths=%h/.reading-api %h/backups/reading-memory %h/reading-memory
 MemoryMax=768M
 CPUQuota=80%
 LimitNOFILE=4096

@@ -1,9 +1,9 @@
 {
-  "name": "reading-api",
+  "name": "reading-memory",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Loopback-only durable reading corpus API for local agents.",
+  "description": "Loopback-only durable reading memory harness for local agents.",
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "node --enable-source-maps dist/src/index.js",

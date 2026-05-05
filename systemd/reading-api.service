@@ -1,0 +1,26 @@
+[Unit]
+Description=Reading API
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/reading-api
+EnvironmentFile=%h/.reading-api/env
+Environment=READING_API_HOST=127.0.0.1
+Environment=READING_API_PORT=4727
+Environment=READING_API_DATA_DIR=%h/.reading-api
+Environment=READING_API_DB=%h/.reading-api/reading.sqlite
+ExecStart=/usr/bin/env npm start
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=%h/.reading-api %h/backups/reading-api %h/reading-api
+MemoryMax=768M
+CPUQuota=80%
+LimitNOFILE=4096
+
+[Install]
+WantedBy=default.target

@@ -82,15 +82,129 @@ Use this when the question is not "can my agent read this?" but "can my agent re
 - It is not a generic knowledge graph or full research platform.
 - It is not trying to store everything. The calling agent should still apply taste and only ingest material worth remembering.
 
-## Run Locally
+## Quickstart
+
+This gets Reading Memory running locally with a temporary SQLite database:
+
+```bash
+git clone https://github.com/aboutaaron/reading-memory.git
+cd reading-memory
+npm ci
+
+export READING_API_TOKEN=dev-secret
+export READING_API_DB=/tmp/reading-memory.sqlite
+export READING_API_FLUE_MODEL=openai/gpt-5.5
+export OPENAI_API_KEY="..."
+
+npm run dev
+```
+
+The service binds to `127.0.0.1:4727` by default. Do not expose it publicly.
+
+In another shell:
+
+```bash
+export READING_API_TOKEN=dev-secret
+
+curl -s http://127.0.0.1:4727/health | jq
+
+curl -s -X POST http://127.0.0.1:4727/ingest \
+  -H "Authorization: Bearer $READING_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "request_id": "00000000-0000-4000-8000-000000000001",
+    "source_type": "text",
+    "source": {
+      "title": "Example note",
+      "text": "Agent memory needs durable recall, provenance, and explicit retrieval."
+    },
+    "source_context": "quickstart",
+    "ingest_reason": "manual_test"
+  }' | jq
+
+curl -s -X POST http://127.0.0.1:4727/query \
+  -H "Authorization: Bearer $READING_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "request_id": "00000000-0000-4000-8000-000000000002",
+    "query": "durable recall provenance retrieval",
+    "top_k": 5
+  }' | jq
+```
+
+Use `READING_API_FLUE_MODEL=anthropic/claude-sonnet-4-5` with `ANTHROPIC_API_KEY` if you prefer Anthropic. Any model you choose must be available to Flue through the matching provider credentials in the service environment.
+
+For anything persistent, replace `dev-secret` with a generated token and put it in a protected env file as shown below.
+
+## Connect An Agent
+
+Reading Memory is useful only when another local agent knows when to call it. The integration contract is intentionally small: give the agent the base URL, bearer token, and a rule for when to persist reading material.
+
+For an agent running on the same machine, expose:
+
+```bash
+READING_MEMORY_URL=http://127.0.0.1:4727
+READING_API_TOKEN=<same token used by the service>
+```
+
+Then add an instruction like this to the agent's system prompt, project instructions, or skill:
+
+```text
+Use Reading Memory for durable reading recall.
+
+When the user shares an article, paper, newsletter, post, PDF URL, or substantial excerpt that is likely to matter later, call POST /ingest on READING_MEMORY_URL with bearer auth from READING_API_TOKEN.
+
+Do not ingest every link. Ingest only material with durable value: useful evidence, strong relevance to the user's themes, research value, or likely future synthesis value.
+
+Use POST /query when answering questions that may depend on previously stored reading.
+
+Use POST /brief-guide when preparing a digest, morning brief, or reading roundup.
+
+Reading Memory never replies to the user directly. The calling agent owns final presentation.
+```
+
+Minimal `POST /ingest` body:
+
+```json
+{
+  "request_id": "00000000-0000-4000-8000-000000000001",
+  "source_type": "url",
+  "source": {
+    "url": "https://example.com/article"
+  },
+  "source_context": "user_shared_link",
+  "ingest_reason": "future_reference"
+}
+```
+
+Minimal `POST /query` body:
+
+```json
+{
+  "request_id": "00000000-0000-4000-8000-000000000002",
+  "query": "what has been saved about agent memory?",
+  "top_k": 5
+}
+```
+
+Minimal `POST /brief-guide` body:
+
+```json
+{
+  "request_id": "00000000-0000-4000-8000-000000000003",
+  "brief_date": "2026-05-05",
+  "lookback_hours": 168,
+  "focus": ["agent infrastructure", "evaluation", "semantic layers"]
+}
+```
+
+## Local Development
 
 ```bash
 cd reading-memory
 npm install
 READING_API_TOKEN=dev-secret READING_API_DB=/tmp/reading.sqlite npm run dev
 ```
-
-The service binds to `127.0.0.1:4727` by default. Do not expose it publicly.
 
 ## Environment
 

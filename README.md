@@ -1,12 +1,14 @@
 # Reading Memory
 
-Reading Memory is a local service that gives an AI agent a durable, queryable memory for things it reads.
+AI agents can read a link, summarize a paper, or answer a question from the current page. What they usually do not get is a durable reading layer: a place to store what was read, why it mattered, how it connects to prior material, and when it should resurface.
 
-It is not a chat app, browser plugin, vector database starter kit, or replacement for OpenClaw, Claude Code, Codex, or any other agent runtime. It is a small backend harness those agents can call when they need to preserve reading judgment beyond the current conversation.
+Reading Memory is that layer. It is a local service that gives an AI agent durable, queryable memory for articles, newsletters, papers, posts, PDFs, and excerpts.
+
+It is not a chat app, browser plugin, vector database starter kit, or replacement for OpenClaw, Claude Code, Codex, or any other agent runtime. It is a backend harness those agents can call when they need to preserve reading judgment beyond the current conversation.
 
 ## What It Is
 
-Reading Memory is a loopback-only Node + SQLite service for agent-owned reading memory. It accepts text, URLs, and PDF URLs; extracts and normalizes the content; stores a durable reading corpus; and uses a Flue skill to produce structured judgment about each item.
+Reading Memory is a loopback-only Node + SQLite service for agent-owned reading memory. It accepts text, URLs, and PDF URLs; extracts and normalizes the content; stores a durable corpus; and uses a Flue skill to produce structured judgment about each item.
 
 The core unit is not just "a document." It is a stored reading item plus metadata an agent can reuse later:
 
@@ -18,11 +20,11 @@ The core unit is not just "a document." It is a stored reading item plus metadat
 - relationships to prior items
 - source and provenance data
 
-The goal is to let an agent remember what mattered about something, not merely that a link once appeared in chat.
+The goal is to let an agent remember what mattered, not merely that a link once appeared in chat.
 
 ## Why Use It
 
-General agent runtimes are good at handling the current task. They are weaker at maintaining a durable domain-specific corpus with stable contracts, citations, dedupe, operational checks, and query surfaces.
+General agent runtimes are good at handling the current task. They are weaker at maintaining a durable, domain-specific reading corpus with stable contracts, provenance, dedupe, operational checks, and explicit query surfaces.
 
 Without a service like this, reading memory usually ends up in one of four places:
 
@@ -31,7 +33,7 @@ Without a service like this, reading memory usually ends up in one of four place
 - bookmarks without judgment
 - vector stores without enough workflow around ingestion, provenance, and reuse
 
-Reading Memory gives the agent a dedicated place to put reading material that should survive the session. It is useful when you want a local assistant to build up taste, context, and recall around articles, newsletters, papers, posts, research, or internal excerpts.
+Reading Memory gives the agent a dedicated place to put reading material that should survive the session. It is useful when you want a local assistant to build up taste, context, and recall instead of repeatedly rediscovering the same sources.
 
 ## How It Works
 
@@ -53,9 +55,9 @@ SQLite stores the corpus facts and Flue session state
 Later, agents query the corpus for recall, brief prep, or synthesis
 ```
 
-The TypeScript service owns the boring reliability work: HTTP contracts, auth, URL/PDF extraction, SSRF protections, content hashes, idempotency, SQLite persistence, query, backups, and systemd deployment.
+The TypeScript service owns the reliability work: HTTP contracts, auth, URL/PDF extraction, SSRF protections, content hashes, idempotency, SQLite persistence, query, backups, and systemd deployment.
 
-Flue owns the agentic judgment boundary: invoking the reading skill, producing structured output, and persisting session state.
+Flue owns the judgment boundary: invoking the reading skill, producing structured output, and persisting session state.
 
 ## What This Adds Beyond Agent Tools
 
@@ -70,7 +72,7 @@ OpenClaw, Claude Code, Codex, and similar tools can read, browse, summarize, and
 | Memory is usually broad and generic | Reading memory is domain-specific and inspectable |
 | Retrieval may be implicit | Query and brief-guide endpoints are explicit |
 
-Use this when the question is not "can my agent read this?" but "can my agent remember why this mattered, connect it to future material, and retrieve it later with enough structure to be useful?"
+Use this when the question is not "can my agent read this?" but "can my agent remember why this mattered, connect it to future material, and retrieve it later with enough structure to act on?"
 
 ## What It Is Not
 

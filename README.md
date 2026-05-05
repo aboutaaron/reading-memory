@@ -1,6 +1,84 @@
 # Reading Memory
 
-Loopback-only Node + SQLite reading memory harness for local agents. It accepts text, URL, and PDF URL inputs; stores a durable corpus in SQLite; and routes item judgment through a Flue skill with structured output.
+Reading Memory is a local service that gives an AI agent a durable, queryable memory for things it reads.
+
+It is not a chat app, browser plugin, vector database starter kit, or replacement for OpenClaw, Claude Code, Codex, or any other agent runtime. It is a small backend harness those agents can call when they need to preserve reading judgment beyond the current conversation.
+
+## What It Is
+
+Reading Memory is a loopback-only Node + SQLite service for agent-owned reading memory. It accepts text, URLs, and PDF URLs; extracts and normalizes the content; stores a durable reading corpus; and uses a Flue skill to produce structured judgment about each item.
+
+The core unit is not just "a document." It is a stored reading item plus metadata an agent can reuse later:
+
+- summary
+- claims
+- relevance score
+- themes and tags
+- recommended action
+- relationships to prior items
+- source and provenance data
+
+The goal is to let an agent remember what mattered about something, not merely that a link once appeared in chat.
+
+## Why Use It
+
+General agent runtimes are good at handling the current task. They are weaker at maintaining a durable domain-specific corpus with stable contracts, citations, dedupe, operational checks, and query surfaces.
+
+Without a service like this, reading memory usually ends up in one of four places:
+
+- conversation history that gets compacted or lost
+- ad hoc markdown notes
+- bookmarks without judgment
+- vector stores without enough workflow around ingestion, provenance, and reuse
+
+Reading Memory gives the agent a dedicated place to put reading material that should survive the session. It is useful when you want a local assistant to build up taste, context, and recall around articles, newsletters, papers, posts, research, or internal excerpts.
+
+## How It Works
+
+The service runs locally on `127.0.0.1` behind bearer-token auth.
+
+```text
+User shares reading material
+        ↓
+Local agent decides it is worth preserving
+        ↓
+Agent calls Reading Memory over localhost HTTP
+        ↓
+Reading Memory extracts, normalizes, dedupes, and stores the item
+        ↓
+Flue analyzes the item with a structured skill
+        ↓
+SQLite stores the corpus facts and Flue session state
+        ↓
+Later, agents query the corpus for recall, brief prep, or synthesis
+```
+
+The TypeScript service owns the boring reliability work: HTTP contracts, auth, URL/PDF extraction, SSRF protections, content hashes, idempotency, SQLite persistence, query, backups, and systemd deployment.
+
+Flue owns the agentic judgment boundary: invoking the reading skill, producing structured output, and persisting session state.
+
+## What This Adds Beyond Agent Tools
+
+OpenClaw, Claude Code, Codex, and similar tools can read, browse, summarize, and edit. Reading Memory adds a persistent subsystem for the parts you do not want trapped inside an individual session.
+
+| Native agent runtime | Reading Memory |
+| --- | --- |
+| Handles the current conversation or task | Maintains a durable reading corpus |
+| May summarize a link once | Stores judgment, tags, provenance, and relationships |
+| Context can compact or disappear | SQLite persists across sessions and model changes |
+| Tool behavior depends on the current agent | HTTP API gives stable contracts any local agent can call |
+| Memory is usually broad and generic | Reading memory is domain-specific and inspectable |
+| Retrieval may be implicit | Query and brief-guide endpoints are explicit |
+
+Use this when the question is not "can my agent read this?" but "can my agent remember why this mattered, connect it to future material, and retrieve it later with enough structure to be useful?"
+
+## What It Is Not
+
+- It is not a public web service. Keep it loopback-only unless you revisit the threat model.
+- It is not a human-facing reading app.
+- It is not a replacement for the agent that talks to the user.
+- It is not a generic knowledge graph or full research platform.
+- It is not trying to store everything. The calling agent should still apply taste and only ingest material worth remembering.
 
 ## Run Locally
 

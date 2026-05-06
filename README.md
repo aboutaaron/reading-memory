@@ -4,57 +4,25 @@ Reading Memory gives local AI agents a durable, queryable memory for articles, n
 
 ## Quickstart
 
-Run Reading Memory locally with a temporary SQLite database:
+Try Reading Memory locally with one command:
 
 ```bash
 git clone https://github.com/aboutaaron/reading-memory.git
 cd reading-memory
-npm ci
-
-export READING_API_TOKEN=dev-secret
-export READING_API_DB=/tmp/reading-memory.sqlite
-export READING_API_FLUE_MODEL=openai/gpt-5.5
-export OPENAI_API_KEY="..."
-
-npm run dev
+OPENAI_API_KEY=... npm --silent run try
 ```
 
-The service binds to `127.0.0.1:4727` by default. Do not expose it publicly.
+That script installs dependencies, creates a temporary local database and bearer token, starts the service on the first open local port from `4727`, waits for `/health`, runs an ingest/query smoke test, and prints the env vars your agent needs.
 
-In another shell:
+Use Anthropic instead:
 
 ```bash
-export READING_API_TOKEN=dev-secret
-
-curl -s http://127.0.0.1:4727/health | jq
-
-curl -s -X POST http://127.0.0.1:4727/ingest \
-  -H "Authorization: Bearer $READING_API_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "request_id": "00000000-0000-4000-8000-000000000001",
-    "source_type": "text",
-    "source": {
-      "title": "Example note",
-      "text": "Agent memory needs durable recall, provenance, and explicit retrieval."
-    },
-    "source_context": "quickstart",
-    "ingest_reason": "manual_test"
-  }' | jq
-
-curl -s -X POST http://127.0.0.1:4727/query \
-  -H "Authorization: Bearer $READING_API_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "request_id": "00000000-0000-4000-8000-000000000002",
-    "query": "durable recall provenance retrieval",
-    "top_k": 5
-  }' | jq
+ANTHROPIC_API_KEY=... READING_API_FLUE_MODEL=anthropic/claude-sonnet-4-5 npm --silent run try
 ```
 
 Use `READING_API_FLUE_MODEL=anthropic/claude-sonnet-4-5` with `ANTHROPIC_API_KEY` if you prefer Anthropic. Any model you choose must be available to [Flue](https://github.com/withastro/flue) through the matching provider credentials in the service environment.
 
-For anything persistent, replace `dev-secret` with a generated token and put it in a protected env file as shown below.
+For a persistent install, put a generated token and database path in a protected env file as shown below.
 
 ## Add It To An Agent
 

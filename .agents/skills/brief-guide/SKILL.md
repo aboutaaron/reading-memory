@@ -9,9 +9,9 @@ Select stored reading items that should inform a morning brief.
 
 Prefer items that are timely, novel, and connected to the local user's configured themes, such as:
 - agent infrastructure
-- analytics agents
-- semantic layers
+- analytics or research agents
+- knowledge management
 - evaluation
-- career leverage
+- source synthesis
 
 Do not send the brief. Return candidates, theme clusters, and skip rationale only.

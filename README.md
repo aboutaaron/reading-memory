@@ -4,7 +4,7 @@ Reading Memory gives local AI agents a durable, queryable memory for articles, n
 
 ## Quickstart
 
-This gets Reading Memory running locally with a temporary SQLite database:
+Run Reading Memory locally with a temporary SQLite database:
 
 ```bash
 git clone https://github.com/aboutaaron/reading-memory.git
@@ -55,6 +55,31 @@ curl -s -X POST http://127.0.0.1:4727/query \
 Use `READING_API_FLUE_MODEL=anthropic/claude-sonnet-4-5` with `ANTHROPIC_API_KEY` if you prefer Anthropic. Any model you choose must be available to Flue through the matching provider credentials in the service environment.
 
 For anything persistent, replace `dev-secret` with a generated token and put it in a protected env file as shown below.
+
+## Add It To An Agent
+
+Reading Memory includes a ready-to-copy agent skill at:
+
+```text
+.agents/skills/use-reading-memory/SKILL.md
+```
+
+Copy it into the agent that should use Reading Memory, then expose:
+
+```bash
+export CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
+mkdir -p "$CODEX_HOME/skills/use-reading-memory"
+cp .agents/skills/use-reading-memory/SKILL.md "$CODEX_HOME/skills/use-reading-memory/SKILL.md"
+```
+
+For non-Codex agents, copy the same `SKILL.md` into that runtime's equivalent skill or instruction directory.
+
+```bash
+READING_MEMORY_URL=http://127.0.0.1:4727
+READING_API_TOKEN=<same token used by the service>
+```
+
+The skill gives the calling agent the operating rule: ingest durable reading material, query before answering recall-heavy questions, and use `/brief-guide` when preparing digests or reading roundups.
 
 ## What It Is
 
@@ -113,6 +138,19 @@ The TypeScript service owns the reliability work: HTTP contracts, auth, URL/PDF 
 
 Flue owns the judgment boundary: invoking the reading skill, producing structured output, and persisting session state.
 
+## Where Flue Fits
+
+Flue is the agent SDK Reading Memory uses for the model-judgment step. The service does not send article text to a raw chat completion and hope for the best. It runs a small Flue agent defined in `.flue/agents/reading.ts`, calls the `analyze-item` skill, and validates the returned JSON.
+
+In this project, Flue provides four things:
+
+- **A skill boundary:** The model sees `.agents/skills/analyze-item/SKILL.md`, which defines the reading-judgment task.
+- **A constrained sandbox:** The analysis path exposes only that skill file. It cannot browse the repo, run commands, or write files.
+- **Session persistence:** Flue turns are stored in SQLite, so the prompt and structured response can be inspected later.
+- **Event hooks:** Reading Memory records redacted Flue activity to local JSONL traces for debugging.
+
+The split is intentional. TypeScript handles the service guarantees. Flue handles the part that needs model judgment: summary, claims, relevance, tags, recommended action, and relationships.
+
 ## What This Adds Beyond Agent Tools
 
 OpenClaw, Claude Code, Codex, and similar tools can read, browse, summarize, and edit. Reading Memory adds a persistent subsystem for the parts you do not want trapped inside an individual session.
@@ -136,9 +174,9 @@ Use this when the question is not "can my agent read this?" but "can my agent re
 - It is not a generic knowledge graph or full research platform.
 - It is not trying to store everything. The calling agent should still apply taste and only ingest material worth remembering.
 
-## Connect An Agent
+## Manual Agent Wiring
 
-Reading Memory is useful only when another local agent knows when to call it. The integration contract is intentionally small: give the agent the base URL, bearer token, and a rule for when to persist reading material.
+Reading Memory is useful only when another local agent knows when to call it. The provided `use-reading-memory` skill is the recommended path, but the integration contract is intentionally small: give the agent the base URL, bearer token, and a rule for when to persist reading material.
 
 For an agent running on the same machine, expose:
 
@@ -147,14 +185,14 @@ READING_MEMORY_URL=http://127.0.0.1:4727
 READING_API_TOKEN=<same token used by the service>
 ```
 
-Then add an instruction like this to the agent's system prompt, project instructions, or skill:
+If you are not using the provided skill, add an instruction like this to the agent's system prompt, project instructions, or local skill:
 
 ```text
 Use Reading Memory for durable reading recall.
 
 When the user shares an article, paper, newsletter, post, PDF URL, or substantial excerpt that is likely to matter later, call POST /ingest on READING_MEMORY_URL with bearer auth from READING_API_TOKEN.
 
-Do not ingest every link. Ingest only material with durable value: useful evidence, strong relevance to the user's themes, research value, or likely future synthesis value.
+Do not ingest every link. Ingest only material with durable value: useful evidence, strong relevance to configured themes, research value, or likely future synthesis value.
 
 Use POST /query when answering questions that may depend on previously stored reading.
 

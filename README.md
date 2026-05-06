@@ -52,7 +52,7 @@ curl -s -X POST http://127.0.0.1:4727/query \
   }' | jq
 ```
 
-Use `READING_API_FLUE_MODEL=anthropic/claude-sonnet-4-5` with `ANTHROPIC_API_KEY` if you prefer Anthropic. Any model you choose must be available to Flue through the matching provider credentials in the service environment.
+Use `READING_API_FLUE_MODEL=anthropic/claude-sonnet-4-5` with `ANTHROPIC_API_KEY` if you prefer Anthropic. Any model you choose must be available to [Flue](https://github.com/withastro/flue) through the matching provider credentials in the service environment.
 
 For anything persistent, replace `dev-secret` with a generated token and put it in a protected env file as shown below.
 
@@ -85,7 +85,7 @@ The skill gives the calling agent the operating rule: ingest durable reading mat
 
 AI agents can read a link, summarize a paper, or answer a question from the current page. What they usually do not get is a durable reading layer: a place to store what was read, why it mattered, how it connects to prior material, and when it should resurface.
 
-Reading Memory is that layer. It is a loopback-only Node + SQLite service for agent-owned reading memory. It accepts text, URLs, and PDF URLs; extracts and normalizes the content; stores a durable corpus; and uses a Flue skill to produce structured judgment about each item.
+Reading Memory is that layer. It is a loopback-only Node + SQLite service for agent-owned reading memory. It accepts text, URLs, and PDF URLs; extracts and normalizes the content; stores a durable corpus; and uses a [Flue](https://github.com/withastro/flue) skill to produce structured judgment about each item.
 
 It is not a chat app, browser plugin, vector database starter kit, or replacement for OpenClaw, Claude Code, Codex, or any other agent runtime. It is a backend harness those agents can call when they need to preserve reading judgment beyond the current conversation.
 
@@ -140,7 +140,7 @@ Flue owns the judgment boundary: invoking the reading skill, producing structure
 
 ## Where Flue Fits
 
-Flue is the agent SDK Reading Memory uses for the model-judgment step. The service does not send article text to a raw chat completion and hope for the best. It runs a small Flue agent defined in `.flue/agents/reading.ts`, calls the `analyze-item` skill, and validates the returned JSON.
+[Flue](https://github.com/withastro/flue) is the agent harness framework Reading Memory uses for the model-judgment step. The service does not send article text to a raw chat completion and hope for the best. It runs a small Flue agent defined in `.flue/agents/reading.ts`, calls the `analyze-item` skill, and validates the returned JSON.
 
 In this project, Flue provides four things:
 

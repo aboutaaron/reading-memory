@@ -1,46 +1,57 @@
 # Reading Memory
 
-Reading Memory gives local AI agents a durable, queryable memory for articles, newsletters, papers, posts, PDFs, and excerpts.
+Reading Memory gives local AI agents a durable reading corpus: articles, newsletters, papers, posts, PDFs, excerpts, and the judgment about why they mattered.
 
-## Quickstart
+## Why It Exists
 
-Try Reading Memory locally with one command:
+Agents can read the page in front of them. They usually cannot build durable taste from what they read: what was worth saving, how it connected to prior sources, when it should resurface, and which future questions it can answer.
 
-```bash
-git clone https://github.com/aboutaaron/reading-memory.git
-cd reading-memory
-OPENAI_API_KEY=... npm --silent run try
-```
+Reading Memory is the local service for that job. It gives an agent explicit endpoints for ingestion, recall, and brief preparation, backed by SQLite and a small [Flue](https://github.com/withastro/flue) judgment step.
 
-That script installs dependencies, creates a temporary local database and bearer token, starts the service on the first open local port from `4727`, waits for `/health`, runs an ingest/query smoke test, and prints the env vars your agent needs.
-
-Use Anthropic instead:
+## Install
 
 ```bash
-ANTHROPIC_API_KEY=... READING_API_FLUE_MODEL=anthropic/claude-sonnet-4-5 npm --silent run try
+npx github:aboutaaron/reading-memory setup --target codex
 ```
 
-Use `READING_API_FLUE_MODEL=anthropic/claude-sonnet-4-5` with `ANTHROPIC_API_KEY` if you prefer Anthropic. Any model you choose must be available to [Flue](https://github.com/withastro/flue) through the matching provider credentials in the service environment.
+The setup command generates a local bearer token, writes `~/.reading-api/env`, and installs the bundled `use-reading-memory` skill for the target agent.
 
-For a persistent install, put a generated token and database path in a protected env file as shown below.
+Targets:
+
+```bash
+npx github:aboutaaron/reading-memory setup --target codex
+npx github:aboutaaron/reading-memory setup --target openclaw
+npx github:aboutaaron/reading-memory setup --target env
+```
+
+Use `--dry-run` to inspect the files it would create.
+
+## Workflow
+
+| Agent need | Reading Memory path |
+| --- | --- |
+| Preserve a useful article, paper, post, PDF, newsletter, or excerpt | `POST /ingest` |
+| Answer from previously saved reading material | `POST /query` |
+| Choose sources for a digest or reading roundup | `POST /brief-guide` |
+| Inspect model judgment and failures | local SQLite + Flue traces |
+
+The calling agent owns the user interaction. Reading Memory is the durable subsystem it calls when current context is not enough.
 
 ## Add It To An Agent
 
-Reading Memory includes a ready-to-copy agent skill at:
+Reading Memory includes a bundled agent skill at:
 
 ```text
 .agents/skills/use-reading-memory/SKILL.md
 ```
 
-Copy it into the agent that should use Reading Memory, then expose:
+The setup command copies this skill for Codex or OpenClaw. For other agents, copy the same file into that runtime's equivalent skill or instruction directory, then expose:
 
 ```bash
-export CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
-mkdir -p "$CODEX_HOME/skills/use-reading-memory"
-cp .agents/skills/use-reading-memory/SKILL.md "$CODEX_HOME/skills/use-reading-memory/SKILL.md"
+source ~/.reading-api/env
 ```
 
-For non-Codex agents, copy the same `SKILL.md` into that runtime's equivalent skill or instruction directory.
+The important environment values are:
 
 ```bash
 READING_MEMORY_URL=http://127.0.0.1:4727

@@ -1,14 +1,68 @@
 # Reading Memory
 
-AI agents can read a link, summarize a paper, or answer a question from the current page. What they usually do not get is a durable reading layer: a place to store what was read, why it mattered, how it connects to prior material, and when it should resurface.
+Reading Memory gives local AI agents a durable, queryable memory for articles, newsletters, papers, posts, PDFs, and excerpts.
 
-Reading Memory is that layer. It is a local service that gives an AI agent durable, queryable memory for articles, newsletters, papers, posts, PDFs, and excerpts.
+## Quickstart
 
-It is not a chat app, browser plugin, vector database starter kit, or replacement for OpenClaw, Claude Code, Codex, or any other agent runtime. It is a backend harness those agents can call when they need to preserve reading judgment beyond the current conversation.
+This gets Reading Memory running locally with a temporary SQLite database:
+
+```bash
+git clone https://github.com/aboutaaron/reading-memory.git
+cd reading-memory
+npm ci
+
+export READING_API_TOKEN=dev-secret
+export READING_API_DB=/tmp/reading-memory.sqlite
+export READING_API_FLUE_MODEL=openai/gpt-5.5
+export OPENAI_API_KEY="..."
+
+npm run dev
+```
+
+The service binds to `127.0.0.1:4727` by default. Do not expose it publicly.
+
+In another shell:
+
+```bash
+export READING_API_TOKEN=dev-secret
+
+curl -s http://127.0.0.1:4727/health | jq
+
+curl -s -X POST http://127.0.0.1:4727/ingest \
+  -H "Authorization: Bearer $READING_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "request_id": "00000000-0000-4000-8000-000000000001",
+    "source_type": "text",
+    "source": {
+      "title": "Example note",
+      "text": "Agent memory needs durable recall, provenance, and explicit retrieval."
+    },
+    "source_context": "quickstart",
+    "ingest_reason": "manual_test"
+  }' | jq
+
+curl -s -X POST http://127.0.0.1:4727/query \
+  -H "Authorization: Bearer $READING_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "request_id": "00000000-0000-4000-8000-000000000002",
+    "query": "durable recall provenance retrieval",
+    "top_k": 5
+  }' | jq
+```
+
+Use `READING_API_FLUE_MODEL=anthropic/claude-sonnet-4-5` with `ANTHROPIC_API_KEY` if you prefer Anthropic. Any model you choose must be available to Flue through the matching provider credentials in the service environment.
+
+For anything persistent, replace `dev-secret` with a generated token and put it in a protected env file as shown below.
 
 ## What It Is
 
-Reading Memory is a loopback-only Node + SQLite service for agent-owned reading memory. It accepts text, URLs, and PDF URLs; extracts and normalizes the content; stores a durable corpus; and uses a Flue skill to produce structured judgment about each item.
+AI agents can read a link, summarize a paper, or answer a question from the current page. What they usually do not get is a durable reading layer: a place to store what was read, why it mattered, how it connects to prior material, and when it should resurface.
+
+Reading Memory is that layer. It is a loopback-only Node + SQLite service for agent-owned reading memory. It accepts text, URLs, and PDF URLs; extracts and normalizes the content; stores a durable corpus; and uses a Flue skill to produce structured judgment about each item.
+
+It is not a chat app, browser plugin, vector database starter kit, or replacement for OpenClaw, Claude Code, Codex, or any other agent runtime. It is a backend harness those agents can call when they need to preserve reading judgment beyond the current conversation.
 
 The core unit is not just "a document." It is a stored reading item plus metadata an agent can reuse later:
 
@@ -81,60 +135,6 @@ Use this when the question is not "can my agent read this?" but "can my agent re
 - It is not a replacement for the agent that talks to the user.
 - It is not a generic knowledge graph or full research platform.
 - It is not trying to store everything. The calling agent should still apply taste and only ingest material worth remembering.
-
-## Quickstart
-
-This gets Reading Memory running locally with a temporary SQLite database:
-
-```bash
-git clone https://github.com/aboutaaron/reading-memory.git
-cd reading-memory
-npm ci
-
-export READING_API_TOKEN=dev-secret
-export READING_API_DB=/tmp/reading-memory.sqlite
-export READING_API_FLUE_MODEL=openai/gpt-5.5
-export OPENAI_API_KEY="..."
-
-npm run dev
-```
-
-The service binds to `127.0.0.1:4727` by default. Do not expose it publicly.
-
-In another shell:
-
-```bash
-export READING_API_TOKEN=dev-secret
-
-curl -s http://127.0.0.1:4727/health | jq
-
-curl -s -X POST http://127.0.0.1:4727/ingest \
-  -H "Authorization: Bearer $READING_API_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "request_id": "00000000-0000-4000-8000-000000000001",
-    "source_type": "text",
-    "source": {
-      "title": "Example note",
-      "text": "Agent memory needs durable recall, provenance, and explicit retrieval."
-    },
-    "source_context": "quickstart",
-    "ingest_reason": "manual_test"
-  }' | jq
-
-curl -s -X POST http://127.0.0.1:4727/query \
-  -H "Authorization: Bearer $READING_API_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "request_id": "00000000-0000-4000-8000-000000000002",
-    "query": "durable recall provenance retrieval",
-    "top_k": 5
-  }' | jq
-```
-
-Use `READING_API_FLUE_MODEL=anthropic/claude-sonnet-4-5` with `ANTHROPIC_API_KEY` if you prefer Anthropic. Any model you choose must be available to Flue through the matching provider credentials in the service environment.
-
-For anything persistent, replace `dev-secret` with a generated token and put it in a protected env file as shown below.
 
 ## Connect An Agent
 

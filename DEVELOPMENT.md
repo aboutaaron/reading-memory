@@ -153,10 +153,30 @@ systemctl --user start reading-memory-backup.service
 Restore drill:
 
 ```bash
-systemctl --user stop reading-memory.service
+# Restore from the newest backup. Pass an explicit path to restore from
+# a specific timestamp.
+./scripts/restore-from-backup.sh
+./scripts/restore-from-backup.sh ~/backups/reading-memory/reading-20260601T032000Z.sqlite
+```
+
+The script sources `~/.reading-api/env`, detects the runner (systemd user unit or macOS LaunchAgent), stops the service, takes a timestamped safety copy of the current db (`reading.sqlite.before-restore-<UTC>`), clears stale WAL/SHM sidecars, copies the chosen backup over `READING_API_DB`, runs `PRAGMA integrity_check`, and restarts the service. If integrity fails it rolls back to the safety copy automatically. Delete the safety copy by hand once you're confident the restored db is good.
+
+If you'd rather run the restore by hand:
+
+```bash
+# stop the service the same way your deployment does
+systemctl --user stop reading-memory.service     # systemd
+launchctl bootout gui/$(id -u)/com.aboutaaron.reading-memory   # launchd
+
+# clear stale sidecars before swapping the .sqlite, otherwise SQLite
+# will see a mismatched WAL/SHM and report "malformed".
+rm -f ~/.reading-api/reading.sqlite-wal ~/.reading-api/reading.sqlite-shm
 cp ~/backups/reading-memory/reading-YYYYMMDDTHHMMSSZ.sqlite ~/.reading-api/reading.sqlite
+
+# verify and restart
 node -e "const { DatabaseSync } = require('node:sqlite'); const db = new DatabaseSync(process.argv[1], { readOnly: true }); console.log(db.prepare('PRAGMA integrity_check').get()); db.close();" ~/.reading-api/reading.sqlite
-systemctl --user start reading-memory.service
+systemctl --user start reading-memory.service     # systemd
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.aboutaaron.reading-memory.plist   # launchd
 ```
 
 ## Validation

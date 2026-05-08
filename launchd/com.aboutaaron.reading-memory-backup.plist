@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  macOS LaunchAgent for Reading Memory's daily SQLite backup.
+
+  This is a TEMPLATE. Substitute the placeholders before copying to
+  ~/Library/LaunchAgents/com.aboutaaron.reading-memory-backup.plist:
+
+    __HOME__           absolute path to your home directory (output of `echo $HOME`)
+    __INSTALL_DIR__    absolute path to the reading-memory checkout
+    __PATH__           a sane PATH for node/npm (e.g. /opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin)
+
+  Then load it:
+
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.aboutaaron.reading-memory-backup.plist
+
+  And to unload / remove:
+
+    launchctl bootout gui/$(id -u)/com.aboutaaron.reading-memory-backup
+
+  Logs land at __HOME__/.reading-api/launchd-backup-stdout.log and launchd-backup-stderr.log.
+  The wrapper at launchd/backup.sh sources __HOME__/.reading-api/env (so it sees the
+  same READING_API_DB and READING_API_BACKUP_DIR as the main service) and then
+  invokes the portable scripts/backup-sqlite.sh — the same script the systemd
+  timer uses on Linux.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.aboutaaron.reading-memory-backup</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>__INSTALL_DIR__/launchd/backup.sh</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__INSTALL_DIR__</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>__HOME__</string>
+    <key>PATH</key>
+    <string>__PATH__</string>
+  </dict>
+
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>3</integer>
+    <key>Minute</key>
+    <integer>20</integer>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>__HOME__/.reading-api/launchd-backup-stdout.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>__HOME__/.reading-api/launchd-backup-stderr.log</string>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>

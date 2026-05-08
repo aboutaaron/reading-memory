@@ -76,6 +76,48 @@ rm ~/Library/LaunchAgents/com.aboutaaron.reading-memory.plist
 
 `KeepAlive.Crashed = true`, `SuccessfulExit = false`. The service restarts only on crash; a clean exit (e.g., from `launchctl bootout`) does not retrigger. `ThrottleInterval = 10` prevents spin loops if the service exits immediately at startup.
 
-## Backup timer (not yet bundled)
+## Backup timer
 
-The `systemd/` directory ships a `reading-memory-backup.timer` that triggers a daily SQLite backup. The `launchd` equivalent (a separate plist with `StartCalendarInterval`) is a future contribution; for now run `scripts/backup-sqlite.sh` from cron or by hand.
+A second LaunchAgent runs `scripts/backup-sqlite.sh` daily, mirroring the `systemd/reading-memory-backup.timer` unit. The wrapper at `launchd/backup.sh` sources `~/.reading-api/env`, applies a random jitter (matches `RandomizedDelaySec=10m`), then `exec`s the same portable backup script the systemd timer uses.
+
+### Install the backup timer
+
+```bash
+INSTALL_DIR="$(pwd)"  # from inside the reading-memory checkout
+sed \
+  -e "s|__HOME__|$HOME|g" \
+  -e "s|__INSTALL_DIR__|$INSTALL_DIR|g" \
+  -e "s|__PATH__|/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin|g" \
+  launchd/com.aboutaaron.reading-memory-backup.plist \
+  > ~/Library/LaunchAgents/com.aboutaaron.reading-memory-backup.plist
+
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.aboutaaron.reading-memory-backup.plist
+```
+
+The default schedule is `Hour=3, Minute=20` — matches the systemd timer numerically. Note the semantic differences:
+
+- **Time zone.** `StartCalendarInterval` fires in the system's **local time**. The systemd unit uses UTC. Adjust the plist if you want the same wall-clock fire time across both deployments.
+- **Catch-up after sleep.** macOS `launchd` fires missed calendar intervals at the next wake (built-in since 10.10). No `Persistent=true` toggle is required.
+- **Jitter.** `StartCalendarInterval` has no built-in `RandomizedDelaySec` equivalent, so the wrapper sleeps for `RANDOM % $READING_API_BACKUP_JITTER_SECS` seconds (default 600) before invoking the backup script. Set `READING_API_BACKUP_JITTER_SECS=0` in `~/.reading-api/env` to disable.
+
+### Trigger a one-off backup
+
+```bash
+launchctl kickstart -k gui/$(id -u)/com.aboutaaron.reading-memory-backup
+```
+
+That runs the timer body now (the same script the daily schedule fires) so you can confirm the backup lands in `~/backups/reading-memory/` before relying on the schedule.
+
+### Backup logs
+
+- `stdout` → `~/.reading-api/launchd-backup-stdout.log`
+- `stderr` → `~/.reading-api/launchd-backup-stderr.log`
+
+### Remove the backup timer
+
+```bash
+launchctl bootout gui/$(id -u)/com.aboutaaron.reading-memory-backup
+rm ~/Library/LaunchAgents/com.aboutaaron.reading-memory-backup.plist
+```
+
+The data files (`~/.reading-api/reading.sqlite`, `~/backups/reading-memory/*.sqlite`) are intentionally left in place. Delete them by hand if you actually want to reset the corpus.

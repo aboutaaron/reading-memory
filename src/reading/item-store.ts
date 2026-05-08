@@ -3,7 +3,7 @@ import type { Database } from '../db/connection.js';
 import { transaction } from '../db/connection.js';
 import { ApiError } from '../api/errors.js';
 import { LIMITS } from '../config.js';
-import type { Analysis, ExtractedSource } from './types.js';
+import type { Analysis, ExtractedSource, RelatedItem } from './types.js';
 
 export type IngestResponse = {
   item_id: string;
@@ -20,6 +20,7 @@ export type IngestResponse = {
   confidence: number;
   reason: string;
   connections: Analysis['relationships'];
+  related_items: RelatedItem[];
 };
 
 export class ItemStore {
@@ -256,7 +257,8 @@ export class ItemStore {
       recommended_action: analysis.recommended_action,
       confidence: analysis.confidence,
       reason: analysis.reason,
-      connections: analysis.relationships
+      connections: analysis.relationships,
+      related_items: this.relatedItems(itemId, analysis)
     };
   }
 
@@ -334,6 +336,40 @@ export class ItemStore {
     `).get(source, source) as { id: string } | undefined;
   }
 
+  private relatedItems(itemId: string, analysis: Analysis): RelatedItem[] {
+    const terms = searchableTerms([
+      analysis.summary,
+      ...analysis.claims,
+      ...analysis.relevance.themes,
+      ...analysis.tags.map((tag) => tag.tag)
+    ]);
+    if (!terms) return [];
+
+    const rows = this.db.prepare(`
+      SELECT i.id AS item_id, i.title, i.source_uri, bm25(item_fts) * -1 AS score
+      FROM item_fts
+      JOIN items i ON i.id = item_fts.item_id
+      WHERE item_fts MATCH ?
+        AND i.status = 'indexed'
+        AND i.id <> ?
+      ORDER BY score DESC, i.ingested_at DESC
+      LIMIT 5
+    `).all(terms, itemId) as Array<{
+      item_id: string;
+      title: string | null;
+      source_uri: string | null;
+      score: number;
+    }>;
+
+    return rows.map((row) => ({
+      item_id: row.item_id,
+      title: row.title,
+      source_uri: row.source_uri,
+      score: row.score,
+      match_reason: 'Matched stored reading via title, summary, claims, themes, or tags'
+    }));
+  }
+
   private log(type: string, principal: string, requestId: string, itemId: string | null, metadata: Record<string, unknown>) {
     this.db.prepare(`
       INSERT INTO activity_log (type, principal, request_id, item_id, metadata_json, created_at)
@@ -345,3 +381,31 @@ export class ItemStore {
 function isStaleAnalysis(ingestedAt: string, now: string) {
   return Date.parse(now) - Date.parse(ingestedAt) > LIMITS.maxSyncResponseSeconds * 1000;
 }
+
+function searchableTerms(values: Array<string | null | undefined>) {
+  const seen = new Set<string>();
+  for (const value of values) {
+    for (const term of String(value ?? '').toLowerCase().match(/[\p{L}\p{N}][\p{L}\p{N}-]{2,}/gu) ?? []) {
+      if (STOP_WORDS.has(term)) continue;
+      seen.add(term);
+      if (seen.size >= 10) break;
+    }
+    if (seen.size >= 10) break;
+  }
+  return [...seen].map((term) => `"${term}"`).join(' OR ');
+}
+
+const STOP_WORDS = new Set([
+  'and',
+  'are',
+  'but',
+  'for',
+  'from',
+  'has',
+  'into',
+  'not',
+  'that',
+  'the',
+  'this',
+  'with'
+]);

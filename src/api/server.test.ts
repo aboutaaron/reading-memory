@@ -64,6 +64,21 @@ test('ingests text, queries it, and exposes item detail without logging raw text
   assert.ok(query.data.answer.includes(`[${ingest.data.item_id}]`));
   assert.deepEqual(query.data.citations, [ingest.data.item_id]);
 
+  const emptyQuery = await fetch(`${base}/query`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer secret', 'content-type': 'application/json' },
+    body: JSON.stringify({
+      request_id: '00000000-0000-4000-8000-000000000004',
+      query: '!!!',
+      top_k: 5
+    })
+  }).then((res) => res.json() as Promise<any>);
+
+  assert.equal(emptyQuery.ok, true);
+  assert.deepEqual(emptyQuery.data.results, []);
+  assert.equal(emptyQuery.data.confidence, 0);
+  assert.equal(emptyQuery.data.empty_reason, 'No searchable reading-corpus terms found.');
+
   const activity = await fetch(`${base}/activity`, {
     headers: { authorization: 'Bearer secret' }
   }).then((res) => res.text());

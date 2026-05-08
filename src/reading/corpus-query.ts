@@ -3,7 +3,9 @@ import type { Database } from '../db/connection.js';
 export function queryCorpus(db: Database, input: { query: string; topK?: number; since?: string; tags?: string[] }) {
   const topK = input.topK ?? 10;
   const terms = input.query.replace(/[^\p{L}\p{N}\s-]/gu, ' ').trim();
-  const ftsQuery = terms.split(/\s+/).filter(Boolean).slice(0, 8).map((term) => `"${term}"`).join(' OR ') || '*';
+  const ftsQuery = terms.split(/\s+/).filter(Boolean).slice(0, 8).map((term) => `"${term}"`).join(' OR ');
+  if (!ftsQuery) return emptyQueryResult('No searchable reading-corpus terms found.');
+
   const rows = db.prepare(`
     SELECT i.id AS item_id, i.title, i.source_uri, snippet(item_fts, 2, '[', ']', '...', 18) AS snippet,
       bm25(item_fts) * -1 AS score
@@ -27,13 +29,7 @@ export function queryCorpus(db: Database, input: { query: string; topK?: number;
     : rows;
 
   if (filtered.length === 0) {
-    return {
-      answer: '',
-      citations: [],
-      results: [],
-      confidence: 0,
-      empty_reason: 'No matching reading-corpus items found.'
-    };
+    return emptyQueryResult('No matching reading-corpus items found.');
   }
 
   const citations = filtered.slice(0, 5).map((row) => row.item_id);
@@ -51,6 +47,16 @@ export function queryCorpus(db: Database, input: { query: string; topK?: number;
     })),
     confidence: Math.min(0.85, 0.55 + filtered.length * 0.05),
     empty_reason: null
+  };
+}
+
+function emptyQueryResult(reason: string) {
+  return {
+    answer: '',
+    citations: [],
+    results: [],
+    confidence: 0,
+    empty_reason: reason
   };
 }
 

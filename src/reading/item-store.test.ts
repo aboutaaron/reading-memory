@@ -162,6 +162,71 @@ test('duplicates dedupe by normalized content hash', async () => {
   assert.equal(second.dedupe_status, 'existing');
 });
 
+test('ingest response surfaces related stored reading without treating it as duplicate', async () => {
+  const db = openMemoryDatabase();
+  const store = new ItemStore(db);
+  const first = await store.ingest({
+    principal: 'token:test',
+    requestId: 'req-1',
+    payloadHash: 'sha256:req1',
+    source,
+    analyze: async () => analysis
+  });
+  const second = await store.ingest({
+    principal: 'token:test',
+    requestId: 'req-2',
+    payloadHash: 'sha256:req2',
+    source: {
+      ...source,
+      title: 'Agent evaluation notes',
+      extractedText: 'Evaluation discipline helps durable agent memory stay useful.',
+      contentHash: 'sha256:related'
+    },
+    analyze: async () => ({
+      ...analysis,
+      summary: 'Evaluation discipline helps durable agent memory stay useful.',
+      claims: ['Agent memory benefits from evaluation discipline.']
+    })
+  });
+
+  assert.notEqual(first.item_id, second.item_id);
+  assert.equal(second.dedupe_status, 'created');
+  assert.equal(second.related_items[0]?.item_id, first.item_id);
+  assert.match(second.related_items[0]?.match_reason ?? '', /Matched stored reading/);
+});
+
+test('unrelated stored reading does not flood ingest related-item hints', async () => {
+  const db = openMemoryDatabase();
+  const store = new ItemStore(db);
+  await store.ingest({
+    principal: 'token:test',
+    requestId: 'req-1',
+    payloadHash: 'sha256:req1',
+    source: {
+      ...source,
+      title: 'Sourdough note',
+      extractedText: 'Starter hydration and oven spring matter for bread.',
+      contentHash: 'sha256:bread'
+    },
+    analyze: async () => ({
+      ...analysis,
+      summary: 'Starter hydration and oven spring matter for bread.',
+      claims: ['Bread quality depends on starter hydration.'],
+      relevance: { score: 0.2, themes: ['cooking'] },
+      tags: [{ tag: 'cooking', reason: 'test', confidence: 0.6 }]
+    })
+  });
+  const second = await store.ingest({
+    principal: 'token:test',
+    requestId: 'req-2',
+    payloadHash: 'sha256:req2',
+    source: { ...source, contentHash: 'sha256:agent-memory-2' },
+    analyze: async () => analysis
+  });
+
+  assert.deepEqual(second.related_items, []);
+});
+
 test('duplicate while analysis is in progress returns retryable conflict', async () => {
   const db = openMemoryDatabase();
   const store = new ItemStore(db);

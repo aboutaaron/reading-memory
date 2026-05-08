@@ -26,6 +26,8 @@ Do not ingest every link. Ingest only material with durable value: useful eviden
 
 Use POST /query when answering questions that may depend on previously stored reading.
 
+Search before ingesting when the source title, URL topic, or core claim is available. If `/query` finds a clear existing item, use it as evidence instead of creating a redundant memory. If the new source adds a materially new angle, ingest it and use `dedupe_status` plus `related_items` as merge/link hints in the calling workflow.
+
 Use POST /brief-guide when preparing a digest, morning brief, or reading roundup.
 
 Reading Memory never replies to the user directly. The calling agent owns final presentation.

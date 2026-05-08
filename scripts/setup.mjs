@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -89,6 +89,33 @@ function copySkill(target, dryRun) {
   return destination;
 }
 
+function copyCommands(target, dryRun) {
+  // Slash commands are a Claude Code primitive (markdown files under
+  // ~/.claude/commands/<name>.md → /<name>). Codex and OpenClaw don't have an
+  // equivalent surface, so we install commands only for the claude-code target.
+  if (target !== 'claude-code') return [];
+
+  const sourceDir = join(root, '.agents', 'commands');
+  if (!existsSync(sourceDir)) return [];
+
+  const destDir = join(homedir(), '.claude', 'commands');
+  ensureDir(destDir, dryRun);
+
+  const installed = [];
+  for (const name of readdirSync(sourceDir)) {
+    if (!name.endsWith('.md')) continue;
+    const source = join(sourceDir, name);
+    const destination = join(destDir, name);
+    if (dryRun) {
+      console.log(`would copy command: ${source} -> ${destination}`);
+    } else {
+      writeFileSync(destination, readFileSync(source, 'utf8'));
+    }
+    installed.push(destination);
+  }
+  return installed;
+}
+
 function existingToken(envFile) {
   if (!existsSync(envFile)) return null;
   const match = readFileSync(envFile, 'utf8').match(/^READING_API_TOKEN=(.+)$/m);
@@ -130,6 +157,7 @@ function setup() {
 
   writePrivateFile(envFile, env, dryRun);
   const skillPath = target === 'env' ? null : copySkill(target, dryRun);
+  const commandPaths = copyCommands(target, dryRun);
 
   console.log(`Reading Memory setup ${dryRun ? 'checked' : 'complete'}.
 
@@ -137,7 +165,10 @@ Env:
   ${envFile}
 ${skillPath ? `
 Skill:
-  ${skillPath}` : ''}
+  ${skillPath}` : ''}${commandPaths.length > 0 ? `
+
+Commands:
+${commandPaths.map((path) => `  ${path}`).join('\n')}` : ''}
 
 Agent environment:
   source ${envFile}

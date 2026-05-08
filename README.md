@@ -65,6 +65,14 @@ READING_API_TOKEN=<same token used by the service>
 
 The skill gives the calling agent the operating rule: ingest durable reading material, query before answering recall-heavy questions, and use `/brief-guide` when preparing digests or reading roundups.
 
+### Claude Code Slash Commands
+
+For the `claude-code` target, setup also installs any markdown files under `.agents/commands/` to `~/.claude/commands/`. Currently bundled:
+
+- `/reading:status` — read-only health check. Verifies env vars, hits `GET /health`, and reports a one-line status. Use when ingest or query is failing, or any time you need to confirm the service is reachable before relying on it.
+
+Codex and OpenClaw use different surfaces for user-invocable commands; the `--target codex` and `--target openclaw` installs skip the commands directory by design.
+
 ## What It Is
 
 Reading Memory is a loopback-only Node + SQLite service for agent-owned reading memory.

@@ -5,7 +5,54 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fauxAssistantMessage, registerFauxProvider } from '@mariozechner/pi-ai';
 import { openMemoryDatabase } from '../db/connection.js';
-import { createFlueReadingAnalyzer } from './flue-agent.js';
+import { createFlueReadingAnalyzer, wrapResolveModelWithBaseUrlOverrides } from './flue-agent.js';
+
+test('wrapResolveModelWithBaseUrlOverrides passes through when no env override is set', () => {
+  const original = { id: 'claude-sonnet-4-5', provider: 'anthropic', baseUrl: 'https://api.anthropic.com' };
+  const wrapped = wrapResolveModelWithBaseUrlOverrides(() => original as never);
+  delete process.env.ANTHROPIC_BASE_URL;
+  const result = wrapped('anthropic/claude-sonnet-4-5') as { baseUrl: string };
+  assert.equal(result.baseUrl, 'https://api.anthropic.com');
+});
+
+test('wrapResolveModelWithBaseUrlOverrides applies <PROVIDER>_BASE_URL env override', () => {
+  const original = { id: 'claude-sonnet-4-5', provider: 'anthropic', baseUrl: 'https://api.anthropic.com' };
+  const wrapped = wrapResolveModelWithBaseUrlOverrides(() => original as never);
+  process.env.ANTHROPIC_BASE_URL = 'http://proxy.test:9123';
+  try {
+    const result = wrapped('anthropic/claude-sonnet-4-5') as { baseUrl: string; provider: string };
+    assert.equal(result.baseUrl, 'http://proxy.test:9123');
+    assert.equal(result.provider, 'anthropic');
+    // Original object is unchanged (functional override).
+    assert.equal(original.baseUrl, 'https://api.anthropic.com');
+  } finally {
+    delete process.env.ANTHROPIC_BASE_URL;
+  }
+});
+
+test('wrapResolveModelWithBaseUrlOverrides only overrides the matching provider', () => {
+  const openai = { id: 'gpt-test', provider: 'openai', baseUrl: 'https://api.openai.com' };
+  const wrapped = wrapResolveModelWithBaseUrlOverrides(() => openai as never);
+  process.env.ANTHROPIC_BASE_URL = 'http://anthropic-proxy.test:9123';
+  try {
+    const result = wrapped('openai/gpt-test') as { baseUrl: string };
+    assert.equal(result.baseUrl, 'https://api.openai.com');
+  } finally {
+    delete process.env.ANTHROPIC_BASE_URL;
+  }
+});
+
+test('wrapResolveModelWithBaseUrlOverrides translates hyphenated provider names to env keys', () => {
+  const cf = { id: 'sonnet-via-cf', provider: 'cloudflare-ai-gateway', baseUrl: 'https://gateway.ai.cloudflare.com/...' };
+  const wrapped = wrapResolveModelWithBaseUrlOverrides(() => cf as never);
+  process.env.CLOUDFLARE_AI_GATEWAY_BASE_URL = 'http://cf-proxy.test:9123';
+  try {
+    const result = wrapped('cloudflare-ai-gateway/sonnet-via-cf') as { baseUrl: string };
+    assert.equal(result.baseUrl, 'http://cf-proxy.test:9123');
+  } finally {
+    delete process.env.CLOUDFLARE_AI_GATEWAY_BASE_URL;
+  }
+});
 
 test('Flue analyzer loads the analyze-item skill and persists session state in SQLite', async () => {
   const db = openMemoryDatabase();

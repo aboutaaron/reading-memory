@@ -31,6 +31,20 @@ npx github:aboutaaron/reading-memory setup --target env
 
 Use `--dry-run` to inspect the files it would create.
 
+### Routing Flue Analysis Through A Proxy
+
+Flue analysis calls the underlying LLM provider directly. If you need that traffic to flow through a corporate proxy, Cloudflare AI Gateway, or a self-hosted gateway (rather than the public provider URL), set a per-provider `<PROVIDER>_BASE_URL` env var alongside `READING_API_FLUE_MODEL`. The override is applied after the model is resolved.
+
+```bash
+# Route anthropic/* models through your proxy (matches the Anthropic SDK convention).
+ANTHROPIC_BASE_URL=https://your-anthropic-proxy.example.com
+
+# Route openai/* models the same way.
+OPENAI_BASE_URL=https://your-openai-proxy.example.com
+```
+
+The env var name is derived from the resolved provider: hyphens become underscores, uppercased, suffixed with `_BASE_URL`. So `cloudflare-ai-gateway/...` reads from `CLOUDFLARE_AI_GATEWAY_BASE_URL`. See `.env.example` for more.
+
 ## Workflow
 
 | Agent need | Reading Memory path |

@@ -52,6 +52,35 @@ export type ReadingAnalyzerInput = {
 
 export type ReadingAnalyzer = (input: ReadingAnalyzerInput) => Promise<Analysis>;
 
+/**
+ * Wraps a Flue resolveModel with per-provider baseUrl overrides driven by env vars.
+ *
+ * Looks up `<PROVIDER>_BASE_URL` (uppercased provider, hyphens → underscores)
+ * after the underlying resolver returns a Model. If set, returns a copy of the
+ * Model with `baseUrl` replaced. Standard convention: this matches the env var
+ * names used by the official Anthropic and OpenAI SDKs, so users with existing
+ * proxy setups (Netflix's Claude Code gateway, Cloudflare AI Gateway, etc.)
+ * can route Reading Memory's analysis traffic without forking pi-ai.
+ *
+ * Workaround: pi-ai pins baseUrl per model in its registry and does not consult
+ * env. This wrapper applies the override after resolution so the override
+ * survives across pi-ai upgrades.
+ */
+export function wrapResolveModelWithBaseUrlOverrides(
+  base: NonNullable<FlueContextConfig['agentConfig']['resolveModel']>
+): NonNullable<FlueContextConfig['agentConfig']['resolveModel']> {
+  return (modelString: string) => {
+    const resolved = base(modelString);
+    if (!resolved || typeof resolved !== 'object') return resolved;
+    const provider = (resolved as { provider?: unknown }).provider;
+    if (typeof provider !== 'string' || provider.length === 0) return resolved;
+    const envKey = `${provider.toUpperCase().replace(/-/g, '_')}_BASE_URL`;
+    const override = process.env[envKey];
+    if (!override) return resolved;
+    return { ...resolved, baseUrl: override };
+  };
+}
+
 export function createFlueReadingAnalyzer(
   db: Database,
   options: {
@@ -64,6 +93,10 @@ export function createFlueReadingAnalyzer(
   const workspaceRoot = options.workspaceRoot ?? WORKSPACE_ROOT;
   const store = new SqliteSessionStore(db);
   const traces = new FlueTraceLogger(options.tracePath);
+  // Default resolver wraps pi-ai's resolver with env-driven baseUrl overrides.
+  // Caller-provided resolveModel (used by tests and special cases) bypasses
+  // the wrapper and is honored as-is.
+  const defaultResolver = wrapResolveModelWithBaseUrlOverrides(resolveModel);
 
   return async ({ itemId, title, text, sessionId }) => {
     const requestedSessionId = sessionId ?? `analysis:${itemId}`;
@@ -89,7 +122,7 @@ export function createFlueReadingAnalyzer(
         skills: {},
         roles: {},
         model: undefined,
-        resolveModel: options.resolveModel ?? resolveModel,
+        resolveModel: options.resolveModel ?? defaultResolver,
         compaction: { enabled: true }
       },
       createDefaultEnv: async () => createSandboxSessionEnv(new SkillOnlySandbox(workspaceRoot), VIRTUAL_ROOT),

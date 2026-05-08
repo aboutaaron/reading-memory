@@ -13,10 +13,12 @@ function usage() {
 Usage:
   reading-memory setup --target codex
   reading-memory setup --target openclaw
+  reading-memory setup --target claude-code
   reading-memory setup --target env
 
 Options:
-  --target <codex|openclaw|env>  Install target. Default: codex.
+  --target <codex|openclaw|claude-code|env>
+                                Install target. Default: codex.
   --url <url>                    Service URL. Default: http://127.0.0.1:4727.
   --env-file <path>              Env file path. Default: ~/.reading-api/env.
   --token <token>                Existing bearer token. Default: generated.
@@ -69,9 +71,12 @@ function copySkill(target, dryRun) {
   }
 
   const codexHome = process.env.CODEX_HOME || join(homedir(), '.codex');
-  const skillRoot = target === 'openclaw'
-    ? join(homedir(), '.openclaw', 'skills', 'use-reading-memory')
-    : join(codexHome, 'skills', 'use-reading-memory');
+  const skillRoots = {
+    codex: join(codexHome, 'skills', 'use-reading-memory'),
+    openclaw: join(homedir(), '.openclaw', 'skills', 'use-reading-memory'),
+    'claude-code': join(homedir(), '.claude', 'skills', 'use-reading-memory')
+  };
+  const skillRoot = skillRoots[target];
   const destination = join(skillRoot, 'SKILL.md');
 
   ensureDir(skillRoot, dryRun);
@@ -102,7 +107,7 @@ function setup() {
   }
 
   const target = readOption('--target', 'codex');
-  if (!['codex', 'openclaw', 'env'].includes(target)) {
+  if (!['codex', 'openclaw', 'claude-code', 'env'].includes(target)) {
     throw new Error(`Unsupported target: ${target}`);
   }
 

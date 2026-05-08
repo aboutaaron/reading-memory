@@ -29,20 +29,7 @@ npx github:aboutaaron/reading-memory setup --target claude-code
 npx github:aboutaaron/reading-memory setup --target env
 ```
 
-Use `--target claude-code` to install the bundled skill into Claude Code's global skill directory.
-
 Use `--dry-run` to inspect the files it would create.
-
-## Data And Backups
-
-Reading Memory keeps runtime state outside the git checkout by default:
-
-- environment file: `~/.reading-api/env`
-- SQLite database: `~/.reading-api/reading.sqlite`
-- Flue trace file: `~/.reading-api/flue-events.jsonl`
-- backup directory: `~/backups/reading-memory`
-
-Back up the SQLite database and backup directory separately from this repo. Do not commit local databases, traces, backups, or real tokens.
 
 ## Workflow
 
@@ -112,7 +99,7 @@ Without a service like this, reading memory usually ends up in one of four place
 
 Reading Memory gives the agent a dedicated place to put reading material that should survive the session. It is useful when you want a local assistant to build up taste, context, and recall instead of repeatedly rediscovering the same sources.
 
-Good callers use it as a disciplined capture path:
+Good callers use it like a capture substrate:
 
 1. Search the corpus before assuming a source is new.
 2. Ingest only when the material has durable value or adds a materially new angle.

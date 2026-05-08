@@ -15,8 +15,6 @@ READING_MEMORY_URL=http://127.0.0.1:4727
 READING_API_TOKEN=<same token used by the service>
 ```
 
-For Codex and OpenClaw, `npx github:aboutaaron/reading-memory setup --target codex` or `--target openclaw` can install the bundled skill. Until setup has a dedicated Claude Code target, use `--target env` and wire the skill manually in Claude Code's local skill or instruction directory.
-
 If you are not using the provided skill, add an instruction like this to the agent's system prompt, project instructions, or local skill:
 
 ```text

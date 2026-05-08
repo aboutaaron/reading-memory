@@ -6,6 +6,13 @@ export type Relationship = {
   explanation: string;
   confidence: number;
 };
+export type RelatedItem = {
+  item_id: string;
+  title: string | null;
+  source_uri: string | null;
+  score: number;
+  match_reason: string;
+};
 export type Analysis = {
   summary: string;
   claims: string[];

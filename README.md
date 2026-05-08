@@ -80,6 +80,7 @@ The core unit is not just "a document." It is a stored reading item plus metadat
 - themes and tags
 - recommended action
 - relationships to prior items
+- related item hints
 - source and provenance data
 
 The goal is to let an agent remember what mattered, not merely that a link once appeared in chat.
@@ -96,6 +97,14 @@ Without a service like this, reading memory usually ends up in one of four place
 - vector stores without enough workflow around ingestion, provenance, and reuse
 
 Reading Memory gives the agent a dedicated place to put reading material that should survive the session. It is useful when you want a local assistant to build up taste, context, and recall instead of repeatedly rediscovering the same sources.
+
+Good callers use it like a capture substrate:
+
+1. Search the corpus before assuming a source is new.
+2. Ingest only when the material has durable value or adds a materially new angle.
+3. Use `dedupe_status`, `related_items`, tags, and relationships to merge, cite, or link the item in the caller's own workflow.
+
+Reading Memory does not edit your notes, project files, or brief output directly. It preserves the corpus evidence and exposes enough structure for the calling agent to decide what to do next.
 
 ## How It Works
 
@@ -137,6 +146,7 @@ OpenClaw, Claude Code, Codex, and similar tools can read, browse, summarize, and
 | Tool behavior depends on the current agent | HTTP API gives stable contracts any local agent can call |
 | Memory is usually broad and generic | Reading memory is domain-specific and inspectable |
 | Retrieval may be implicit | Query and brief-guide endpoints are explicit |
+| Duplicate handling is usually conversational | Content hashes, idempotency, and related-item hints are explicit |
 
 Use this when the question is not "can my agent read this?" but "can my agent remember why this mattered, connect it to future material, and retrieve it later with enough structure to act on?"
 

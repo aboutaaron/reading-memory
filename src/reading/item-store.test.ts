@@ -53,6 +53,56 @@ test('replays same request from idempotency snapshot', async () => {
   assert.equal(second.summary, first.summary);
 });
 
+test('idempotency replay normalizes older response snapshots', async () => {
+  const db = openMemoryDatabase();
+  const now = new Date().toISOString();
+  const expires = new Date(Date.now() + 86_400_000).toISOString();
+  db.prepare(`
+    INSERT INTO items (
+      id, source_type, title, ingested_at, content_hash, status, extracted_text, truncated, provenance_json
+    ) VALUES ('item_old', 'text', 'Old item', ?, ?, 'indexed', '', 0, '{}')
+  `).run(now, source.contentHash);
+  db.prepare(`
+    INSERT INTO idempotency_keys (principal, request_id, payload_hash, item_id, response_snapshot, created_at, expires_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    'token:test',
+    'req-old',
+    'sha256:req-old',
+    'item_old',
+    JSON.stringify({
+      item_id: 'item_old',
+      status: 'indexed',
+      dedupe_status: 'created',
+      title: 'Old item',
+      source_uri: null,
+      content_hash: source.contentHash,
+      summary: 'Old snapshot without related items.',
+      core_claims: [],
+      tags: [],
+      relevance: { score: 0, themes: [] },
+      recommended_action: 'save',
+      confidence: 0,
+      reason: 'old snapshot',
+      connections: []
+    }),
+    now,
+    expires
+  );
+
+  const store = new ItemStore(db);
+  const response = await store.ingest({
+    principal: 'token:test',
+    requestId: 'req-old',
+    payloadHash: 'sha256:req-old',
+    source,
+    analyze: async () => analysis
+  });
+
+  assert.equal(response.dedupe_status, 'idempotent_replay');
+  assert.deepEqual(response.related_items, []);
+});
+
 test('conflicting idempotency replay fails', async () => {
   const db = openMemoryDatabase();
   const store = new ItemStore(db);
@@ -160,6 +210,114 @@ test('duplicates dedupe by normalized content hash', async () => {
 
   assert.equal(first.item_id, second.item_id);
   assert.equal(second.dedupe_status, 'existing');
+});
+
+test('ingest response surfaces related stored reading without treating it as duplicate', async () => {
+  const db = openMemoryDatabase();
+  const store = new ItemStore(db);
+  const first = await store.ingest({
+    principal: 'token:test',
+    requestId: 'req-1',
+    payloadHash: 'sha256:req1',
+    source,
+    analyze: async () => analysis
+  });
+  const second = await store.ingest({
+    principal: 'token:test',
+    requestId: 'req-2',
+    payloadHash: 'sha256:req2',
+    source: {
+      ...source,
+      title: 'Agent evaluation notes',
+      extractedText: 'Evaluation discipline helps durable agent memory stay useful.',
+      contentHash: 'sha256:related'
+    },
+    analyze: async () => ({
+      ...analysis,
+      summary: 'Evaluation discipline helps durable agent memory stay useful.',
+      claims: ['Agent memory benefits from evaluation discipline.']
+    })
+  });
+
+  assert.notEqual(first.item_id, second.item_id);
+  assert.equal(second.dedupe_status, 'created');
+  assert.equal(second.related_items[0]?.item_id, first.item_id);
+  assert.match(second.related_items[0]?.match_reason ?? '', /Matched stored reading/);
+});
+
+test('related-item hints include title overlap from the new source', async () => {
+  const db = openMemoryDatabase();
+  const store = new ItemStore(db);
+  const first = await store.ingest({
+    principal: 'token:test',
+    requestId: 'req-1',
+    payloadHash: 'sha256:req1',
+    source: {
+      ...source,
+      title: 'Project Phoenix migration',
+      extractedText: 'Alpha body.',
+      contentHash: 'sha256:phoenix-1'
+    },
+    analyze: async () => ({
+      ...analysis,
+      summary: 'General article.',
+      claims: ['General note.'],
+      relevance: { score: 0.5, themes: ['alpha-tag'] },
+      tags: [{ tag: 'alpha-tag', reason: 'test', confidence: 0.5 }]
+    })
+  });
+  const second = await store.ingest({
+    principal: 'token:test',
+    requestId: 'req-2',
+    payloadHash: 'sha256:req2',
+    source: {
+      ...source,
+      title: 'Project Phoenix rollout',
+      extractedText: 'Beta body.',
+      contentHash: 'sha256:phoenix-2'
+    },
+    analyze: async () => ({
+      ...analysis,
+      summary: 'Another broad summary.',
+      claims: ['Another broad claim.'],
+      relevance: { score: 0.5, themes: ['beta-tag'] },
+      tags: [{ tag: 'beta-tag', reason: 'test', confidence: 0.5 }]
+    })
+  });
+
+  assert.equal(second.related_items[0]?.item_id, first.item_id);
+});
+
+test('unrelated stored reading does not flood ingest related-item hints', async () => {
+  const db = openMemoryDatabase();
+  const store = new ItemStore(db);
+  await store.ingest({
+    principal: 'token:test',
+    requestId: 'req-1',
+    payloadHash: 'sha256:req1',
+    source: {
+      ...source,
+      title: 'Sourdough note',
+      extractedText: 'Starter hydration and oven spring matter for bread.',
+      contentHash: 'sha256:bread'
+    },
+    analyze: async () => ({
+      ...analysis,
+      summary: 'Starter hydration and oven spring matter for bread.',
+      claims: ['Bread quality depends on starter hydration.'],
+      relevance: { score: 0.2, themes: ['cooking'] },
+      tags: [{ tag: 'cooking', reason: 'test', confidence: 0.6 }]
+    })
+  });
+  const second = await store.ingest({
+    principal: 'token:test',
+    requestId: 'req-2',
+    payloadHash: 'sha256:req2',
+    source: { ...source, contentHash: 'sha256:agent-memory-2' },
+    analyze: async () => analysis
+  });
+
+  assert.deepEqual(second.related_items, []);
 });
 
 test('duplicate while analysis is in progress returns retryable conflict', async () => {

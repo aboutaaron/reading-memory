@@ -34,6 +34,14 @@ Poor candidates:
 
 Do not ingest every link. Apply judgment first.
 
+Before treating material as a brand-new memory, search first when you have enough signal:
+
+1. Call `POST /query` with the source title, URL topic, or core claim.
+2. If the result clearly matches an existing stored item, use that existing item as evidence instead of re-ingesting.
+3. If the new source adds materially new evidence, angle, or updated content, ingest it and use the returned `dedupe_status` and `related_items` to explain how it connects.
+
+Exact duplicate content returns the existing item. Related-but-new content may return `related_items`; treat those as merge/link hints for your own workflow, not as final answers.
+
 ## When To Query
 
 Call `POST /query` before answering questions that may depend on stored reading memory, prior source material, or recurring themes.

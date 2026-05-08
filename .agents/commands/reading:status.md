@@ -31,17 +31,29 @@ Read-only health check for the Reading Memory service. Does not ingest, query, o
        "status": "ok",
        "ready": true,
        "db": "ok",
-       "disk": { "free_bytes": 12345678, "warn": false }
+       "disk": { "free_bytes": 12345678, "warn": false },
+       "backup": {
+         "status": "ok",
+         "warn": false,
+         "last_backup_at": "2026-05-08T03:20:00.000Z",
+         "age_seconds": 14400
+       }
      }
    }
    ```
 
-3. **Report a one-line status to the user.** Match the shape:
+   The `backup` block reports recency for SQLite snapshots written by `scripts/backup-sqlite.sh`. `status` is one of `ok`, `stale`, `missing`, or `unknown`. `last_backup_at` and `age_seconds` are present only when at least one backup file was found.
 
-   - All green → `Reading Memory: up · db ok · disk ok`
-   - Disk warning → `Reading Memory: up · db ok · disk warn (cleanup advised)`
+3. **Report a one-line status to the user.** Compose the line in this order: `up · db <state> · disk <state> · backup <state>`. Each segment uses the templates below; omit the suffix when nothing's noteworthy.
+
+   - All green → `Reading Memory: up · db ok · disk ok · backup ok (<age>h ago)`
+   - Disk warning → `Reading Memory: up · db ok · disk warn (cleanup advised) · backup ok (<age>h ago)`
+   - Backup stale (`backup.warn: true`) → `Reading Memory: up · db ok · disk ok · backup STALE (<age>h ago — daily timer may have stopped)`
+   - Backup missing (`backup.status: "missing"`) → `Reading Memory: up · db ok · disk ok · backup not configured (no files in $READING_API_BACKUP_DIR)`
    - `ready: false` → `Reading Memory: degraded · not ready (status: <data.status>)`
-   - Connection refused / timeout → `Reading Memory: down · service not running. Start with \`npm start\` in the reading-memory checkout (or via systemd: \`systemctl --user start reading-memory.service\`).`
+   - Connection refused / timeout → `Reading Memory: down · service not running. Start with \`npm start\` in the reading-memory checkout (or via systemd: \`systemctl --user start reading-memory.service\` / launchd: \`launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.aboutaaron.reading-memory.plist\`).`
    - HTTP error other than connection refused → `Reading Memory: error · HTTP <status>`
+
+   Convert `age_seconds` to whole hours (`Math.floor(age_seconds / 3600)`) for the `<age>h` placeholder; under one hour, use minutes (`<age>m`).
 
 4. **Do not** call `/ingest`, `/query`, `/brief-guide`, `/items/*`, or `/activity` from this command. Status is read-only.

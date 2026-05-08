@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { mkdtempSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from 'node:fs';
 import { request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,15 +10,17 @@ import { createReadingApi } from './server.js';
 import { analyzeItem } from '../reading/analyzer.js';
 import type { AppConfig } from '../config.js';
 
-function testConfig(dataDir: string): AppConfig {
+function testConfig(dataDir: string, overrides: Partial<AppConfig> = {}): AppConfig {
   return {
     host: '127.0.0.1',
     port: 0,
     dbPath: ':memory:',
     authToken: 'secret',
     dataDir,
+    backupDir: join(dataDir, 'backups'),
     flueModel: 'test/model',
-    flueTracePath: null
+    flueTracePath: null,
+    ...overrides
   };
 }
 
@@ -112,6 +114,97 @@ test('rejects unauthenticated capability access', async () => {
 
   const res = await fetch(`${base}/capabilities`);
   assert.equal(res.status, 401);
+
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+});
+
+test('health reports backup status as missing when backup dir is absent', async () => {
+  const db = openMemoryDatabase();
+  const dataDir = mkdtempSync(join(tmpdir(), 'reading-api-test-'));
+  const server = createReadingApi(testConfig(dataDir), db);
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const port = (server.address() as { port: number }).port;
+
+  const res = await fetch(`http://127.0.0.1:${port}/health`).then((r) => r.json() as Promise<any>);
+  assert.equal(res.data.backup.status, 'missing');
+  assert.equal(res.data.backup.warn, false);
+  assert.equal(res.data.backup.last_backup_at, undefined);
+
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+});
+
+test('health reports backup status as ok when a recent backup exists', async () => {
+  const db = openMemoryDatabase();
+  const dataDir = mkdtempSync(join(tmpdir(), 'reading-api-test-'));
+  const backupDir = join(dataDir, 'backups');
+  mkdirSync(backupDir, { recursive: true });
+  const backupFile = join(backupDir, 'reading-20260508T032000Z.sqlite');
+  writeFileSync(backupFile, '');
+  const now = Date.now() / 1000;
+  utimesSync(backupFile, now, now);
+
+  const server = createReadingApi(testConfig(dataDir, { backupDir }), db);
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const port = (server.address() as { port: number }).port;
+
+  const res = await fetch(`http://127.0.0.1:${port}/health`).then((r) => r.json() as Promise<any>);
+  assert.equal(res.data.backup.status, 'ok');
+  assert.equal(res.data.backup.warn, false);
+  assert.equal(typeof res.data.backup.last_backup_at, 'string');
+  assert.ok(res.data.backup.age_seconds >= 0 && res.data.backup.age_seconds < 60);
+
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+});
+
+test('health reports backup status as stale when newest backup exceeds threshold', async () => {
+  const db = openMemoryDatabase();
+  const dataDir = mkdtempSync(join(tmpdir(), 'reading-api-test-'));
+  const backupDir = join(dataDir, 'backups');
+  mkdirSync(backupDir, { recursive: true });
+  const backupFile = join(backupDir, 'reading-20260507T032000Z.sqlite');
+  writeFileSync(backupFile, '');
+  const thirtyHoursAgo = (Date.now() - 30 * 60 * 60 * 1000) / 1000;
+  utimesSync(backupFile, thirtyHoursAgo, thirtyHoursAgo);
+
+  const server = createReadingApi(testConfig(dataDir, { backupDir }), db);
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const port = (server.address() as { port: number }).port;
+
+  const res = await fetch(`http://127.0.0.1:${port}/health`).then((r) => r.json() as Promise<any>);
+  assert.equal(res.data.backup.status, 'stale');
+  assert.equal(res.data.backup.warn, true);
+  assert.ok(res.data.backup.age_seconds >= 30 * 60 * 60);
+
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+});
+
+test('health picks the newest backup file when several exist', async () => {
+  const db = openMemoryDatabase();
+  const dataDir = mkdtempSync(join(tmpdir(), 'reading-api-test-'));
+  const backupDir = join(dataDir, 'backups');
+  mkdirSync(backupDir, { recursive: true });
+
+  const oldFile = join(backupDir, 'reading-20260501T032000Z.sqlite');
+  const recentFile = join(backupDir, 'reading-20260508T032000Z.sqlite');
+  writeFileSync(oldFile, '');
+  writeFileSync(recentFile, '');
+
+  const longAgo = (Date.now() - 7 * 24 * 60 * 60 * 1000) / 1000;
+  const now = Date.now() / 1000;
+  utimesSync(oldFile, longAgo, longAgo);
+  utimesSync(recentFile, now, now);
+
+  const server = createReadingApi(testConfig(dataDir, { backupDir }), db);
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const port = (server.address() as { port: number }).port;
+
+  const res = await fetch(`http://127.0.0.1:${port}/health`).then((r) => r.json() as Promise<any>);
+  assert.equal(res.data.backup.status, 'ok');
+  assert.ok(res.data.backup.age_seconds < 60);
 
   await new Promise<void>((resolve) => server.close(() => resolve()));
 });

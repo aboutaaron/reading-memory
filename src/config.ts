@@ -13,6 +13,7 @@ export const LIMITS = {
   maxBodyBytes: 10 * 1024 * 1024,
   minDiskFreeBytes: 1 * 1024 * 1024 * 1024,
   warnDiskFreeBytes: 15 * 1024 * 1024 * 1024,
+  staleBackupSeconds: 25 * 60 * 60,
   relationshipsPerItem: 3,
   relationshipMinConfidence: 0.7
 } as const;
@@ -23,6 +24,7 @@ export type AppConfig = {
   dbPath: string;
   authToken: string;
   dataDir: string;
+  backupDir: string;
   flueModel: string;
   flueTracePath: string | null;
 };
@@ -43,6 +45,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     dbPath,
     authToken: env.READING_API_TOKEN ?? '',
     dataDir,
+    backupDir: env.READING_API_BACKUP_DIR ?? join(homedir(), 'backups', 'reading-memory'),
     flueModel: env.READING_API_FLUE_MODEL ?? 'openai/gpt-5.5',
     flueTracePath: env.READING_API_FLUE_TRACE_PATH === 'off'
       ? null

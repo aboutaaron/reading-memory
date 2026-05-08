@@ -149,7 +149,7 @@ SQLite stores the corpus facts and Flue session state
 Later, agents query the corpus for recall, brief prep, or synthesis
 ```
 
-The TypeScript service owns the reliability work: HTTP contracts, auth, URL/PDF extraction, SSRF protections, content hashes, idempotency, SQLite persistence, query, backups, and systemd deployment.
+The TypeScript service owns the reliability work: HTTP contracts, auth, URL/PDF extraction, SSRF protections, content hashes, idempotency, SQLite persistence, query, backups, and `systemd` (Linux) / `launchd` (macOS) deployment.
 
 Flue owns the judgment boundary: invoking the reading skill, producing structured output, and persisting session state.
 

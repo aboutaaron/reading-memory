@@ -37,7 +37,7 @@ The TypeScript service owns the reliability boundary:
 - idempotent storage
 - SQLite migrations and persistence
 - query and brief-guide endpoints
-- backups, smoke tests, and systemd deployment
+- backups, smoke tests, and `systemd` (Linux) / `launchd` (macOS) deployment
 
 Flue owns the model-judgment boundary:
 

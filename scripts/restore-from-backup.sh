@@ -55,12 +55,18 @@ fi
 
 # Detect the active runner. Each branch sets RUNNER and the start/stop
 # hooks; an empty RUNNER means we'll skip service-control steps.
+#
+# We test for *installation* (the plist file or a unit known to systemd's
+# user manager), not the *current loaded/enabled state* — `is-enabled` and
+# `launchctl print` both miss valid states like `disabled`, `linked`, or
+# bootout'd, which would leave RUNNER empty for a user who really is on
+# that runner and expects the script to handle their service.
 RUNNER=""
-if command -v launchctl >/dev/null 2>&1 \
-   && launchctl print "gui/$(id -u)/com.aboutaaron.reading-memory" >/dev/null 2>&1; then
+LAUNCHD_PLIST="$HOME/Library/LaunchAgents/com.aboutaaron.reading-memory.plist"
+if [ -f "$LAUNCHD_PLIST" ] && command -v launchctl >/dev/null 2>&1; then
   RUNNER="launchd"
 elif command -v systemctl >/dev/null 2>&1 \
-     && systemctl --user is-enabled reading-memory.service >/dev/null 2>&1; then
+     && systemctl --user cat reading-memory.service >/dev/null 2>&1; then
   RUNNER="systemd"
 fi
 
@@ -108,13 +114,8 @@ clear_sidecars() {
 start_service() {
   case "$RUNNER" in
     launchd)
-      local plist="$HOME/Library/LaunchAgents/com.aboutaaron.reading-memory.plist"
-      if [ -f "$plist" ]; then
-        echo "Starting LaunchAgent..."
-        launchctl bootstrap "gui/$(id -u)" "$plist"
-      else
-        echo "restore: plist not found at $plist; start the service manually." >&2
-      fi
+      echo "Starting LaunchAgent..."
+      launchctl bootstrap "gui/$(id -u)" "$LAUNCHD_PLIST"
       ;;
     systemd)
       echo "Starting systemd user service..."
@@ -124,6 +125,22 @@ start_service() {
       echo "No active service runner detected; restore left the service stopped."
       ;;
   esac
+}
+
+# Take a self-contained snapshot of the live db using SQLite's VACUUM INTO.
+# A plain cp of $DB_PATH would miss any committed WAL state that hadn't been
+# checkpointed yet — the service does checkpoint on its SIGTERM handler, but
+# a rollback shouldn't depend on that having actually finished. VACUUM INTO
+# consolidates committed-but-unmerged WAL into the snapshot regardless.
+take_safety_snapshot() {
+  local target="$1"
+  node -e '
+    const { DatabaseSync } = require("node:sqlite");
+    const db = new DatabaseSync(process.argv[1]);
+    const escaped = process.argv[2].replaceAll("\x27", "\x27\x27");
+    db.exec("VACUUM INTO \x27" + escaped + "\x27");
+    db.close();
+  ' "$DB_PATH" "$target"
 }
 
 # Use Node's built-in sqlite for the integrity check so we don't depend
@@ -149,8 +166,8 @@ stop_service
 SAFETY=""
 if [ -f "$DB_PATH" ]; then
   SAFETY="${DB_PATH}.before-restore-$(date -u +%Y%m%dT%H%M%SZ)"
-  cp "$DB_PATH" "$SAFETY"
-  echo "Safety copy: $SAFETY"
+  take_safety_snapshot "$SAFETY"
+  echo "Safety snapshot: $SAFETY"
 fi
 
 clear_sidecars

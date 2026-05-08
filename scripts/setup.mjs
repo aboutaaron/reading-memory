@@ -4,6 +4,8 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
+import { mergeEnvFile, parseEnvKeys } from './lib/env-file.mjs';
+
 const root = resolve(dirname(new URL(import.meta.url).pathname), '..');
 const args = process.argv.slice(2);
 
@@ -116,10 +118,9 @@ function copyCommands(target, dryRun) {
   return installed;
 }
 
-function existingToken(envFile) {
-  if (!existsSync(envFile)) return null;
-  const match = readFileSync(envFile, 'utf8').match(/^READING_API_TOKEN=(.+)$/m);
-  return match?.[1] ?? null;
+function readEnvFile(envFile) {
+  if (!existsSync(envFile)) return '';
+  return readFileSync(envFile, 'utf8');
 }
 
 function setup() {
@@ -142,18 +143,25 @@ function setup() {
   const url = readOption('--url', 'http://127.0.0.1:4727');
   const envFile = resolve(expandHome(readOption('--env-file', '~/.reading-api/env')));
   const dataDir = dirname(envFile);
-  const token = readOption('--token', existingToken(envFile) ?? randomUUID());
 
-  const env = [
-    `READING_MEMORY_URL=${url}`,
-    `READING_API_TOKEN=${token}`,
-    'READING_API_HOST=127.0.0.1',
-    `READING_API_PORT=${new URL(url).port || '4727'}`,
-    `READING_API_DATA_DIR=${dataDir}`,
-    `READING_API_DB=${join(dataDir, 'reading.sqlite')}`,
-    `READING_API_FLUE_TRACE_PATH=${join(dataDir, 'flue-events.jsonl')}`,
-    ''
-  ].join('\n');
+  const existingContent = readEnvFile(envFile);
+  const existingKeys = parseEnvKeys(existingContent);
+  // Treat an empty `READING_API_TOKEN=` as missing — keeping it would write a
+  // blank token back to disk, and `requireAuth` rejects every request when the
+  // configured token is empty (503). Generate a fresh UUID instead.
+  const token = readOption('--token', existingKeys.READING_API_TOKEN || randomUUID());
+
+  const ownedValues = {
+    READING_MEMORY_URL: url,
+    READING_API_TOKEN: token,
+    READING_API_HOST: '127.0.0.1',
+    READING_API_PORT: new URL(url).port || '4727',
+    READING_API_DATA_DIR: dataDir,
+    READING_API_DB: join(dataDir, 'reading.sqlite'),
+    READING_API_FLUE_TRACE_PATH: join(dataDir, 'flue-events.jsonl')
+  };
+
+  const env = mergeEnvFile(existingContent, ownedValues);
 
   writePrivateFile(envFile, env, dryRun);
   const skillPath = target === 'env' ? null : copySkill(target, dryRun);

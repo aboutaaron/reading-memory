@@ -1,5 +1,5 @@
 ---
-status: active
+status: completed
 created: 2026-05-08
 ---
 

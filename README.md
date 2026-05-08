@@ -120,18 +120,6 @@ Good callers use it as a disciplined capture path:
 
 Reading Memory does not edit your notes, project files, or brief output directly. It preserves the corpus evidence and exposes enough structure for the calling agent to decide what to do next.
 
-## Resource Catalogs
-
-A lightweight resource catalog such as `memory/resources.md` and Reading Memory do different jobs.
-
-| Resource catalog | Reading Memory |
-| --- | --- |
-| Stores pointers, keywords, and "where did I see this?" notes | Stores extracted content, summaries, claims, judgment, provenance, and relationships |
-| Good for quick URL lookup | Good for recall, synthesis, brief prep, and durable reading context |
-| Can include links that are merely interesting | Should only ingest material with durable reading value |
-
-Keep them separate by default. A caller like `/add-resource` can also call `POST /ingest` when a saved link has durable reading value, but it should not ingest every URL just because it was cataloged.
-
 ## How It Works
 
 The service runs locally on `127.0.0.1` behind bearer-token auth.

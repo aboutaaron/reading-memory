@@ -146,7 +146,10 @@ function setup() {
 
   const existingContent = readEnvFile(envFile);
   const existingKeys = parseEnvKeys(existingContent);
-  const token = readOption('--token', existingKeys.READING_API_TOKEN ?? randomUUID());
+  // Treat an empty `READING_API_TOKEN=` as missing — keeping it would write a
+  // blank token back to disk, and `requireAuth` rejects every request when the
+  // configured token is empty (503). Generate a fresh UUID instead.
+  const token = readOption('--token', existingKeys.READING_API_TOKEN || randomUUID());
 
   const ownedValues = {
     READING_MEMORY_URL: url,

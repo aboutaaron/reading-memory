@@ -2,8 +2,8 @@ import type { Database } from '../db/connection.js';
 
 export function queryCorpus(db: Database, input: { query: string; topK?: number; since?: string; tags?: string[] }) {
   const topK = input.topK ?? 10;
-  const terms = input.query.replace(/[^\p{L}\p{N}\s-]/gu, ' ').trim();
-  const ftsQuery = terms.split(/\s+/).filter(Boolean).slice(0, 8).map((term) => `"${term}"`).join(' OR ');
+  const terms = input.query.match(/[\p{L}\p{N}][\p{L}\p{N}-]*/gu) ?? [];
+  const ftsQuery = terms.slice(0, 8).map((term) => `"${term}"`).join(' OR ');
   if (!ftsQuery) return emptyQueryResult('No searchable reading-corpus terms found.');
 
   const rows = db.prepare(`

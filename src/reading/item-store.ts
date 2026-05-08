@@ -40,7 +40,7 @@ export class ItemStore {
       if (existingReplay.payload_hash !== input.payloadHash) {
         throw new ApiError('IDEMPOTENCY_CONFLICT', 'request_id has already been used with a different payload', 409);
       }
-      return { ...JSON.parse(existingReplay.response_snapshot), dedupe_status: 'idempotent_replay' };
+      return normalizeIngestReplay(JSON.parse(existingReplay.response_snapshot));
     }
 
     const inFlightKey = `${input.principal}\0${input.requestId}`;
@@ -258,7 +258,7 @@ export class ItemStore {
       confidence: analysis.confidence,
       reason: analysis.reason,
       connections: analysis.relationships,
-      related_items: this.relatedItems(itemId, analysis)
+      related_items: this.relatedItems(itemId, item.title, analysis)
     };
   }
 
@@ -336,8 +336,9 @@ export class ItemStore {
     `).get(source, source) as { id: string } | undefined;
   }
 
-  private relatedItems(itemId: string, analysis: Analysis): RelatedItem[] {
+  private relatedItems(itemId: string, title: string | null, analysis: Analysis): RelatedItem[] {
     const terms = searchableTerms([
+      title,
       analysis.summary,
       ...analysis.claims,
       ...analysis.relevance.themes,
@@ -380,6 +381,14 @@ export class ItemStore {
 
 function isStaleAnalysis(ingestedAt: string, now: string) {
   return Date.parse(now) - Date.parse(ingestedAt) > LIMITS.maxSyncResponseSeconds * 1000;
+}
+
+function normalizeIngestReplay(snapshot: IngestResponse): IngestResponse {
+  return {
+    ...snapshot,
+    dedupe_status: 'idempotent_replay',
+    related_items: Array.isArray(snapshot.related_items) ? snapshot.related_items : []
+  };
 }
 
 function searchableTerms(values: Array<string | null | undefined>) {

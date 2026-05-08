@@ -69,7 +69,7 @@ test('ingests text, queries it, and exposes item detail without logging raw text
     headers: { authorization: 'Bearer secret', 'content-type': 'application/json' },
     body: JSON.stringify({
       request_id: '00000000-0000-4000-8000-000000000004',
-      query: '!!!',
+      query: '--- !!!',
       top_k: 5
     })
   }).then((res) => res.json() as Promise<any>);

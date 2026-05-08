@@ -25,10 +25,11 @@ Targets:
 ```bash
 npx github:aboutaaron/reading-memory setup --target codex
 npx github:aboutaaron/reading-memory setup --target openclaw
+npx github:aboutaaron/reading-memory setup --target claude-code
 npx github:aboutaaron/reading-memory setup --target env
 ```
 
-Until the setup command grows a dedicated Claude Code target, use `--target env` for Claude Code. Then copy `.agents/skills/use-reading-memory/SKILL.md` into Claude Code's skill or instruction location and source `~/.reading-api/env` from that runtime.
+Use `--target claude-code` to install the bundled skill into Claude Code's global skill directory.
 
 Use `--dry-run` to inspect the files it would create.
 
@@ -62,7 +63,7 @@ Reading Memory includes a bundled agent skill at:
 .agents/skills/use-reading-memory/SKILL.md
 ```
 
-The setup command copies this skill for Codex or OpenClaw. For other agents, including Claude Code until there is a dedicated setup target, copy the same file into that runtime's equivalent skill or instruction directory, then expose:
+The setup command copies this skill for Codex, OpenClaw, or Claude Code. For other agents, copy the same file into that runtime's equivalent skill or instruction directory, then expose:
 
 ```bash
 source ~/.reading-api/env

@@ -32,3 +32,20 @@ test('allows disabling local Flue trace logging', () => {
 
   assert.equal(config.flueTracePath, null);
 });
+
+test('defaults backupDir under home when env is unset', () => {
+  const config = loadConfig({
+    READING_API_TOKEN: 'secret'
+  } as NodeJS.ProcessEnv);
+
+  assert.ok(config.backupDir.endsWith('/backups/reading-memory'), config.backupDir);
+});
+
+test('honors READING_API_BACKUP_DIR override', () => {
+  const config = loadConfig({
+    READING_API_TOKEN: 'secret',
+    READING_API_BACKUP_DIR: '/var/lib/reading-backups'
+  } as NodeJS.ProcessEnv);
+
+  assert.equal(config.backupDir, '/var/lib/reading-backups');
+});

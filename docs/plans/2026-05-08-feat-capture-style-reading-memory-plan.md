@@ -167,7 +167,7 @@ This plan upgrades the general Reading Memory skill/API so local agents can inge
 
 ## Documentation / Operational Notes
 
-- Update the general skill contract so agents know Reading Memory is a corpus substrate with capture hygiene, not a note app and not a brief-only helper.
+- Update the general skill contract so agents know Reading Memory is a corpus service with capture hygiene, not a note app and not a brief-only helper.
 
 ## Sources & References
 

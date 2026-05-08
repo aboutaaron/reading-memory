@@ -28,7 +28,20 @@ npx github:aboutaaron/reading-memory setup --target openclaw
 npx github:aboutaaron/reading-memory setup --target env
 ```
 
+Until the setup command grows a dedicated Claude Code target, use `--target env` for Claude Code. Then copy `.agents/skills/use-reading-memory/SKILL.md` into Claude Code's skill or instruction location and source `~/.reading-api/env` from that runtime.
+
 Use `--dry-run` to inspect the files it would create.
+
+## Data And Backups
+
+Reading Memory keeps runtime state outside the git checkout by default:
+
+- environment file: `~/.reading-api/env`
+- SQLite database: `~/.reading-api/reading.sqlite`
+- Flue trace file: `~/.reading-api/flue-events.jsonl`
+- backup directory: `~/backups/reading-memory`
+
+Back up the SQLite database and backup directory separately from this repo. Do not commit local databases, traces, backups, or real tokens.
 
 ## Workflow
 
@@ -49,7 +62,7 @@ Reading Memory includes a bundled agent skill at:
 .agents/skills/use-reading-memory/SKILL.md
 ```
 
-The setup command copies this skill for Codex or OpenClaw. For other agents, copy the same file into that runtime's equivalent skill or instruction directory, then expose:
+The setup command copies this skill for Codex or OpenClaw. For other agents, including Claude Code until there is a dedicated setup target, copy the same file into that runtime's equivalent skill or instruction directory, then expose:
 
 ```bash
 source ~/.reading-api/env
@@ -98,13 +111,25 @@ Without a service like this, reading memory usually ends up in one of four place
 
 Reading Memory gives the agent a dedicated place to put reading material that should survive the session. It is useful when you want a local assistant to build up taste, context, and recall instead of repeatedly rediscovering the same sources.
 
-Good callers use it like a capture substrate:
+Good callers use it as a disciplined capture path:
 
 1. Search the corpus before assuming a source is new.
 2. Ingest only when the material has durable value or adds a materially new angle.
 3. Use `dedupe_status`, `related_items`, tags, and relationships to merge, cite, or link the item in the caller's own workflow.
 
 Reading Memory does not edit your notes, project files, or brief output directly. It preserves the corpus evidence and exposes enough structure for the calling agent to decide what to do next.
+
+## Resource Catalogs
+
+A lightweight resource catalog such as `memory/resources.md` and Reading Memory do different jobs.
+
+| Resource catalog | Reading Memory |
+| --- | --- |
+| Stores pointers, keywords, and "where did I see this?" notes | Stores extracted content, summaries, claims, judgment, provenance, and relationships |
+| Good for quick URL lookup | Good for recall, synthesis, brief prep, and durable reading context |
+| Can include links that are merely interesting | Should only ingest material with durable reading value |
+
+Keep them separate by default. A caller like `/add-resource` can also call `POST /ingest` when a saved link has durable reading value, but it should not ingest every URL just because it was cataloged.
 
 ## How It Works
 

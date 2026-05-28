@@ -7,16 +7,18 @@ import type { Database } from '../db/connection.js';
 import { ApiError, toErrorPayload } from './errors.js';
 import { requireAuth } from './auth.js';
 import { RateLimiter } from './rate-limit.js';
-import { BriefGuideRequestSchema, IngestRequestSchema, QueryRequestSchema } from './contracts.js';
+import { BriefEventsRequestSchema, BriefGuideRequestSchema, IngestRequestSchema, QueryRequestSchema } from './contracts.js';
 import { ItemStore } from '../reading/item-store.js';
 import { createFlueReadingAnalyzer, type ReadingAnalyzer } from '../reading/flue-agent.js';
 import { extractSource, payloadHash } from '../reading/extract-source.js';
 import { briefGuide } from '../reading/brief-guide.js';
 import { getItem, queryCorpus } from '../reading/corpus-query.js';
+import { BriefEventStore, briefEventsPayloadHash } from '../reading/brief-events.js';
 
 export function createReadingApi(config: AppConfig, db: Database, options: { analyzer?: ReadingAnalyzer } = {}) {
   const limiter = new RateLimiter({ ingest: 10, query: 30, brief: 10 });
   const store = new ItemStore(db);
+  const briefEventStore = new BriefEventStore(db);
   const analyzer = options.analyzer ?? createFlueReadingAnalyzer(db, { model: config.flueModel, tracePath: config.flueTracePath });
 
   return createServer(async (req, res) => {
@@ -73,6 +75,18 @@ export function createReadingApi(config: AppConfig, db: Database, options: { ana
         if (body.lookback_hours !== undefined) briefInput.lookbackHours = body.lookback_hours;
         if (body.focus !== undefined) briefInput.focus = body.focus;
         const data = briefGuide(db, briefInput);
+        return send(res, 200, { ok: true, request_id: body.request_id, data, error: null });
+      }
+
+      if (req.method === 'POST' && url.pathname === '/brief-events') {
+        limiter.check(principal, 'brief');
+        const body = v.parse(BriefEventsRequestSchema, await readJson(req));
+        const data = briefEventStore.record({
+          principal,
+          requestId: body.request_id,
+          payloadHash: briefEventsPayloadHash(body),
+          body
+        });
         return send(res, 200, { ok: true, request_id: body.request_id, data, error: null });
       }
 
@@ -171,6 +185,7 @@ function capabilities() {
   return {
     supported_ingest_types: ['url', 'text', 'pdf_url'],
     query_modes: ['fts'],
+    supports_brief_events: true,
     max_sync_response_seconds: LIMITS.maxSyncResponseSeconds,
     idempotency_ttl_seconds: LIMITS.idempotencyTtlSeconds,
     max_text_chars: LIMITS.maxTextChars,

@@ -98,6 +98,111 @@ test('ingests text, queries it, and exposes item detail without logging raw text
   assert.equal(brief.ok, true);
   assert.equal(brief.data.candidates[0].item_id, ingest.data.item_id);
 
+  const events = await fetch(`${base}/brief-events`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer secret', 'content-type': 'application/json' },
+    body: JSON.stringify({
+      request_id: '00000000-0000-4000-8000-000000000005',
+      events: [{
+        item_id: ingest.data.item_id,
+        brief_date: '2026-05-04',
+        event_kind: 'included',
+        included_bool: true,
+        rationale: 'Used in the brief',
+        source_context: 'server-test'
+      }]
+    })
+  }).then((res) => res.json() as Promise<any>);
+  assert.equal(events.ok, true);
+  assert.equal(events.data.dedupe_status, 'created');
+  assert.equal(events.data.events[0].item_id, ingest.data.item_id);
+
+  const eventReplay = await fetch(`${base}/brief-events`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer secret', 'content-type': 'application/json' },
+    body: JSON.stringify({
+      request_id: '00000000-0000-4000-8000-000000000005',
+      events: [{
+        item_id: ingest.data.item_id,
+        brief_date: '2026-05-04',
+        event_kind: 'included',
+        included_bool: true,
+        rationale: 'Used in the brief',
+        source_context: 'server-test'
+      }]
+    })
+  }).then((res) => res.json() as Promise<any>);
+  assert.equal(eventReplay.ok, true);
+  assert.equal(eventReplay.data.dedupe_status, 'idempotent_replay');
+
+  const eventConflict = await fetch(`${base}/brief-events`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer secret', 'content-type': 'application/json' },
+    body: JSON.stringify({
+      request_id: '00000000-0000-4000-8000-000000000005',
+      events: [{
+        item_id: ingest.data.item_id,
+        brief_date: '2026-05-04',
+        event_kind: 'skipped',
+        included_bool: false,
+        rationale: 'Different payload',
+        source_context: 'server-test'
+      }]
+    })
+  }).then(async (res) => ({ status: res.status, body: await res.json() as any }));
+  assert.equal(eventConflict.status, 409);
+  assert.equal(eventConflict.body.error.code, 'IDEMPOTENCY_CONFLICT');
+
+  const repeatedEvent = await fetch(`${base}/brief-events`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer secret', 'content-type': 'application/json' },
+    body: JSON.stringify({
+      request_id: '00000000-0000-4000-8000-000000000006',
+      events: [{
+        item_id: ingest.data.item_id,
+        brief_date: '2026-05-04',
+        event_kind: 'included',
+        included_bool: true,
+        rationale: 'Used in the brief',
+        source_context: 'server-test'
+      }]
+    })
+  }).then((res) => res.json() as Promise<any>);
+  assert.equal(repeatedEvent.ok, true);
+  assert.equal(repeatedEvent.data.dedupe_status, 'existing');
+
+  const divergentRepeatedEvent = await fetch(`${base}/brief-events`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer secret', 'content-type': 'application/json' },
+    body: JSON.stringify({
+      request_id: '00000000-0000-4000-8000-000000000008',
+      events: [{
+        item_id: ingest.data.item_id,
+        brief_date: '2026-05-04',
+        event_kind: 'included',
+        included_bool: true,
+        rationale: 'Different rationale',
+        source_context: 'server-test'
+      }]
+    })
+  }).then(async (res) => ({ status: res.status, body: await res.json() as any }));
+  assert.equal(divergentRepeatedEvent.status, 409);
+  assert.equal(divergentRepeatedEvent.body.error.code, 'IDEMPOTENCY_CONFLICT');
+
+  const nextBrief = await fetch(`${base}/brief-guide`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer secret', 'content-type': 'application/json' },
+    body: JSON.stringify({
+      request_id: '00000000-0000-4000-8000-000000000007',
+      brief_date: '2026-05-05',
+      lookback_hours: 48,
+      focus: ['agent-memory']
+    })
+  }).then((res) => res.json() as Promise<any>);
+  assert.equal(nextBrief.ok, true);
+  assert.deepEqual(nextBrief.data.candidates, []);
+  assert.match(nextBrief.data.skip_items[0].reason, /recently included/);
+
   await new Promise<void>((resolve) => server.close(() => resolve()));
 });
 

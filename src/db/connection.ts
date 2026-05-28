@@ -2,10 +2,10 @@ import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
+import { CURRENT_USER_VERSION, migrateSchema } from './migrations.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCHEMA = readFileSync(join(__dirname, 'schema.sql'), 'utf8');
-const CURRENT_USER_VERSION = 1;
 
 export type Database = DatabaseSync;
 
@@ -51,6 +51,19 @@ export function migrate(db: Database) {
       db.exec('ROLLBACK');
       throw error;
     }
+    return;
+  }
+
+  if (row.user_version < CURRENT_USER_VERSION) {
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      const migratedVersion = migrateSchema(db, row.user_version);
+      db.exec(`PRAGMA user_version = ${migratedVersion}`);
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
   }
 }
 
@@ -83,7 +96,8 @@ function assertEmptyV0Database(db: Database) {
     'idempotency_keys',
     'sessions',
     'activity_log',
-    'item_fts'
+    'item_fts',
+    'brief_events'
   ];
   const placeholders = appTables.map(() => '?').join(',');
   const rows = db.prepare(`

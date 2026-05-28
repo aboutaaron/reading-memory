@@ -31,9 +31,25 @@ export const BriefGuideRequestSchema = v.object({
   focus: v.optional(v.array(v.string()))
 });
 
+export const BriefEventSchema = v.object({
+  item_id: v.pipe(v.string(), v.minLength(1)),
+  brief_date: v.string(),
+  event_kind: v.picklist(['included', 'skipped', 'resurfaced']),
+  included_bool: v.boolean(),
+  rationale: v.pipe(v.string(), v.minLength(1)),
+  source_context: v.optional(v.string()),
+  resurface_after: v.optional(v.nullable(v.string()))
+});
+
+export const BriefEventsRequestSchema = v.object({
+  request_id: RequestIdSchema,
+  events: v.pipe(v.array(BriefEventSchema), v.minLength(1), v.maxLength(50))
+});
+
 export type IngestRequest = v.InferOutput<typeof IngestRequestSchema>;
 export type QueryRequest = v.InferOutput<typeof QueryRequestSchema>;
 export type BriefGuideRequest = v.InferOutput<typeof BriefGuideRequestSchema>;
+export type BriefEventsRequest = v.InferOutput<typeof BriefEventsRequestSchema>;
 
 export type Envelope<T> = {
   ok: boolean;

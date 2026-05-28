@@ -12,6 +12,7 @@
     "start": "node --enable-source-maps dist/src/index.js",
     "build": "tsc -p tsconfig.json && mkdir -p dist/src/db && cp src/db/schema.sql dist/src/db/schema.sql && rm -rf dist/.agents && cp -R .agents dist/.agents",
     "test": "node --test --import tsx src/**/*.test.ts",
+    "eval:reading": "tsx src/evals/reading-memory-eval.ts",
     "smoke": "tsx scripts/smoke-test.ts",
     "traces": "tsx scripts/inspect-traces.ts"
   },

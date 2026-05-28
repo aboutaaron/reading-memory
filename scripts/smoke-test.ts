@@ -50,5 +50,21 @@ await request('/query', {
   })
 });
 
+const guide = await request('/brief-guide', {
+  method: 'POST',
+  body: JSON.stringify({
+    request_id: crypto.randomUUID(),
+    brief_date: new Date().toISOString().slice(0, 10),
+    lookback_hours: 168,
+    focus: ['agent-memory', 'analytics-agents', 'evaluation']
+  })
+});
+
 await request(`/items/${ingest.data.item_id}`);
-console.log(JSON.stringify({ ok: true, item_id: ingest.data.item_id }));
+const activity = await request('/activity');
+console.log(JSON.stringify({
+  ok: true,
+  item_id: ingest.data.item_id,
+  brief_candidates: guide.data.candidates.length,
+  activity_rows: activity.data.length
+}));

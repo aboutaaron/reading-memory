@@ -6,6 +6,7 @@ export function queryCorpus(db: Database, input: { query: string; topK?: number;
   const ftsQuery = terms.slice(0, 8).map((term) => `"${term}"`).join(' OR ');
   if (!ftsQuery) return emptyQueryResult('No searchable reading-corpus terms found.');
 
+  const tags = input.tags ?? [];
   const rows = db.prepare(`
     SELECT i.id AS item_id, i.title, i.source_uri, snippet(item_fts, 2, '[', ']', '...', 18) AS snippet,
       bm25(item_fts) * -1 AS score
@@ -14,9 +15,15 @@ export function queryCorpus(db: Database, input: { query: string; topK?: number;
     WHERE item_fts MATCH ?
       AND i.status = 'indexed'
       AND (? IS NULL OR i.ingested_at >= ?)
+      AND (
+        ? = 0 OR EXISTS (
+          SELECT 1 FROM tags t
+          WHERE t.item_id = i.id AND t.tag IN (${tags.map(() => '?').join(',') || "''"})
+        )
+      )
     ORDER BY score DESC
     LIMIT ?
-  `).all(ftsQuery, input.since ?? null, input.since ?? null, topK) as Array<{
+  `).all(ftsQuery, input.since ?? null, input.since ?? null, tags.length, ...tags, topK) as Array<{
     item_id: string;
     title: string | null;
     source_uri: string | null;
@@ -24,20 +31,16 @@ export function queryCorpus(db: Database, input: { query: string; topK?: number;
     score: number;
   }>;
 
-  const filtered = input.tags?.length
-    ? rows.filter((row) => hasAnyTag(db, row.item_id, input.tags ?? []))
-    : rows;
-
-  if (filtered.length === 0) {
+  if (rows.length === 0) {
     return emptyQueryResult('No matching reading-corpus items found.');
   }
 
-  const citations = filtered.slice(0, 5).map((row) => row.item_id);
+  const citations = rows.slice(0, 5).map((row) => row.item_id);
   const answer = `Relevant stored reading appears in ${citations.map((id) => `[${id}]`).join(', ')}.`;
   return {
     answer,
     citations,
-    results: filtered.map((row) => ({
+    results: rows.map((row) => ({
       item_id: row.item_id,
       title: row.title,
       source_uri: row.source_uri,
@@ -45,7 +48,7 @@ export function queryCorpus(db: Database, input: { query: string; topK?: number;
       score: row.score,
       match_reason: 'Matched full-text index and filters'
     })),
-    confidence: Math.min(0.85, 0.55 + filtered.length * 0.05),
+    confidence: Math.min(0.85, 0.55 + rows.length * 0.05),
     empty_reason: null
   };
 }
@@ -58,12 +61,6 @@ function emptyQueryResult(reason: string) {
     confidence: 0,
     empty_reason: reason
   };
-}
-
-function hasAnyTag(db: Database, itemId: string, tags: string[]) {
-  const row = db.prepare(`SELECT 1 AS ok FROM tags WHERE item_id = ? AND tag IN (${tags.map(() => '?').join(',')}) LIMIT 1`)
-    .get(itemId, ...tags) as { ok: number } | undefined;
-  return Boolean(row);
 }
 
 export function getItem(db: Database, itemId: string) {

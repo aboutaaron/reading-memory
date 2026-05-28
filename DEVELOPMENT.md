@@ -30,6 +30,8 @@ Search before ingesting when the source title, URL topic, or core claim is avail
 
 Use POST /brief-guide when preparing a digest, morning brief, or reading roundup.
 
+After finalizing a digest or brief, use POST /brief-events to record which stored items were included or skipped. This records corpus state only; it does not send or write the brief.
+
 Reading Memory never replies to the user directly. The calling agent owns final presentation.
 ```
 
@@ -65,6 +67,24 @@ Minimal `POST /brief-guide` body:
   "brief_date": "2026-05-05",
   "lookback_hours": 168,
   "focus": ["agent infrastructure", "evaluation", "semantic layers"]
+}
+```
+
+Minimal `POST /brief-events` body:
+
+```json
+{
+  "request_id": "00000000-0000-4000-8000-000000000004",
+  "events": [
+    {
+      "item_id": "item_...",
+      "brief_date": "2026-05-05",
+      "event_kind": "included",
+      "included_bool": true,
+      "rationale": "Used as a receipt in the morning brief",
+      "source_context": "morning_brief"
+    }
+  ]
 }
 ```
 
@@ -118,6 +138,8 @@ curl -s -X POST http://127.0.0.1:4727/ingest \
 
 Supported source types: `url`, `text`, `pdf_url`. URL and PDF ingestion require HTTPS. Private IPs, redirects to private IPs, unsupported MIME types, and oversized bodies are blocked.
 
+`POST /brief-events` is idempotent by `request_id` and guarded against equivalent duplicate events for the same item/date/kind/source context.
+
 ## Deploy On A VPS
 
 ```bash
@@ -143,6 +165,8 @@ Daily backup command:
 READING_API_DB=~/.reading-api/reading.sqlite READING_API_BACKUP_DIR=~/backups/reading-memory ./scripts/backup-sqlite.sh
 ```
 
+Backups are written with private permissions and emit a JSON report containing source, destination, size, and integrity status.
+
 The deployed user timer runs the same script daily:
 
 ```bash
@@ -164,6 +188,7 @@ systemctl --user start reading-memory.service
 ```bash
 npm test
 npm run build
+npm run eval:reading
 READING_API_TOKEN=<token> npm run smoke
 curl -s http://127.0.0.1:4727/health | jq
 ss -ltnp | grep 4727
@@ -174,6 +199,7 @@ Expected healthy signals:
 - `/health` returns `ready: true`, `db: "ok"`, and disk warning is false before production use.
 - `ss` shows `127.0.0.1:4727`, not `0.0.0.0`.
 - `journalctl --user -u reading-memory.service` contains metadata events only, not request bodies or extracted text.
+- `npm run eval:reading` passes before model, ranking, dedupe, or brief-guide behavior changes are accepted.
 
 Rollback:
 

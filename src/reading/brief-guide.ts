@@ -13,7 +13,7 @@ export function briefGuide(db: Database, input: { briefDate: string; lookbackHou
     JOIN analyses a ON a.item_id = i.id
     LEFT JOIN brief_events be ON be.id = (
       SELECT id FROM brief_events
-      WHERE item_id = i.id AND brief_date < ?
+      WHERE item_id = i.id AND brief_date <= ?
       ORDER BY brief_date DESC, created_at DESC
       LIMIT 1
     )
@@ -76,7 +76,8 @@ type BriefRow = {
 function parseBriefDate(briefDate: string) {
   const isoDate = /^\d{4}-\d{2}-\d{2}$/.test(briefDate) ? `${briefDate}T12:00:00.000Z` : briefDate;
   const parsed = new Date(isoDate);
-  return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+  if (Number.isNaN(parsed.getTime())) throw new Error(`Invalid brief_date: ${briefDate}`);
+  return parsed;
 }
 
 function isEligibleForBrief(row: BriefRow, briefDate: string) {
@@ -91,17 +92,17 @@ function hasResurfaced(row: BriefRow, briefDate: string) {
 }
 
 function skipReason(row: BriefRow, briefDate: string) {
-  if (row.latest_event_kind === 'included' && !hasResurfaced(row, briefDate)) {
-    return `recently included on ${row.latest_event_date}`;
-  }
   if (row.latest_resurface_after && row.latest_resurface_after > briefDate) {
     return `deferred until ${row.latest_resurface_after}`;
+  }
+  if (row.latest_event_kind === 'included' && !hasResurfaced(row, briefDate)) {
+    return `recently included on ${row.latest_event_date}`;
   }
   return 'outside focus or lower confidence';
 }
 
 function resurfaceNote(row: BriefRow, briefDate: string) {
-  if (hasResurfaced(row, briefDate)) return `eligible after ${row.latest_resurface_after}`;
+  if (hasResurfaced(row, briefDate)) return `resurfacing after ${row.latest_resurface_after}`;
   return row.latest_event_rationale ?? null;
 }
 

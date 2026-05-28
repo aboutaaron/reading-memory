@@ -98,7 +98,13 @@ function extractCanonicalUrlFromText(input: string): string | null {
   for (const pattern of patterns) {
     const match = input.match(pattern);
     const candidate = match?.[1] ? cleanUrl(match[1]) : null;
-    if (candidate) return canonicalizeUrl(candidate);
+    if (candidate) {
+      try {
+        return canonicalizeUrl(candidate);
+      } catch {
+        return null;
+      }
+    }
   }
 
   return null;

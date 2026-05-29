@@ -54,6 +54,16 @@ Call `POST /brief-guide` when preparing a digest, morning brief, reading roundup
 
 The endpoint returns candidates and rationale. It does not write or send the brief.
 
+After the digest or brief is finalized, call `POST /brief-events` to record which stored items were included or deliberately skipped. This lets later `/brief-guide` calls avoid stale repeats while still allowing an item to resurface when it has a new angle or reaches `resurface_after`.
+
+Brief event rules:
+- `brief_date` and `resurface_after` use `YYYY-MM-DD`.
+- `included` and `resurfaced` events must set `included_bool` to `true`.
+- `skipped` events must set `included_bool` to `false`.
+- Use `included` when a brief uses an item, `skipped` when a returned item is deliberately not used, and `resurfaced` when a previously deferred item reappears with a new angle.
+- Set `resurface_after` on an included item only when it should be eligible again after that date. Omitting it suppresses normal repeats after inclusion.
+- Batch `skip_items` from `/brief-guide` into `/brief-events` as `skipped` when the caller intentionally rejects them.
+
 ## API Shape
 
 Every non-health request needs:
@@ -92,12 +102,39 @@ Minimal brief guide:
 ```json
 {
   "request_id": "00000000-0000-4000-8000-000000000003",
+  "brief_date": "2026-05-05",
   "lookback_hours": 168,
   "focus": ["agent infrastructure", "evaluation"]
 }
 ```
 
+Minimal brief event:
+
+```json
+{
+  "request_id": "00000000-0000-4000-8000-000000000004",
+  "events": [
+    {
+      "item_id": "item_...",
+      "brief_date": "2026-05-05",
+      "event_kind": "included",
+      "included_bool": true,
+      "rationale": "Used as a receipt in the morning brief",
+      "source_context": "morning_brief"
+    }
+  ]
+}
+```
+
 Use a fresh `request_id` for each new operation. Reuse the same `request_id` only when intentionally retrying the same request.
+
+`dedupe_status` is `created` for new writes, `idempotent_replay` when the same `request_id` safely replays, and `existing` when an equivalent event was already recorded.
+
+Run the Reading Memory eval before accepting model, ranking, dedupe, or brief-guide behavior changes:
+
+```bash
+npm run eval:reading
+```
 
 ## Safety
 

@@ -54,6 +54,7 @@ The env var name is derived from the resolved provider: hyphens become underscor
 | Preserve a useful article, paper, post, PDF, newsletter, or excerpt | `POST /ingest` |
 | Answer from previously saved reading material | `POST /query` |
 | Choose sources for a digest or reading roundup | `POST /brief-guide` |
+| Record what a digest or brief used or skipped | `POST /brief-events` |
 | Inspect model judgment and failures | local SQLite + Flue traces |
 
 The calling agent owns the user interaction. Reading Memory is the durable subsystem it calls when current context is not enough.
@@ -79,7 +80,7 @@ READING_MEMORY_URL=http://127.0.0.1:4727
 READING_API_TOKEN=<same token used by the service>
 ```
 
-The skill gives the calling agent the operating rule: ingest durable reading material, query before answering recall-heavy questions, and use `/brief-guide` when preparing digests or reading roundups.
+The skill gives the calling agent the operating rule: ingest durable reading material, query before answering recall-heavy questions, use `/brief-guide` when preparing digests or reading roundups, and record final digest outcomes with `/brief-events`.
 
 ### Claude Code Slash Commands
 
@@ -128,6 +129,7 @@ Good callers use it like a capture substrate:
 1. Search the corpus before assuming a source is new.
 2. Ingest only when the material has durable value or adds a materially new angle.
 3. Use `dedupe_status`, `related_items`, tags, and relationships to merge, cite, or link the item in the caller's own workflow.
+4. After a digest or brief is finalized, record included/skipped outcomes so future source selection can avoid stale repeats.
 
 Reading Memory does not edit your notes, project files, or brief output directly. It preserves the corpus evidence and exposes enough structure for the calling agent to decide what to do next.
 
@@ -170,7 +172,7 @@ OpenClaw, Claude Code, Codex, and similar tools can read, browse, summarize, and
 | Context can compact or disappear | SQLite persists across sessions and model changes |
 | Tool behavior depends on the current agent | HTTP API gives stable contracts any local agent can call |
 | Memory is usually broad and generic | Reading memory is domain-specific and inspectable |
-| Retrieval may be implicit | Query and brief-guide endpoints are explicit |
+| Retrieval may be implicit | Query, brief-guide, and brief-events endpoints are explicit |
 | Duplicate handling is usually conversational | Content hashes, idempotency, and related-item hints are explicit |
 
 Use this when the question is not "can my agent read this?" but "can my agent remember why this mattered, connect it to future material, and retrieve it later with enough structure to act on?"

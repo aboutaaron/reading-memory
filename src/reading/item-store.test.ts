@@ -530,3 +530,37 @@ test('same source with changed content creates superseding item', async () => {
   assert.equal(second.dedupe_status, 'content_changed');
   assert.equal(row.supersedes_item_id, first.item_id);
 });
+
+test('text captures with same inferred canonical source do not become unrelated memories', async () => {
+  const db = openMemoryDatabase();
+  const store = new ItemStore(db);
+  const first = await store.ingest({
+    principal: 'token:test',
+    requestId: 'req-1',
+    payloadHash: 'sha256:req1',
+    source: {
+      ...source,
+      canonicalUrl: 'https://example.com/article',
+      extractedText: 'First wrapper body.',
+      contentHash: 'sha256:first-wrapper'
+    },
+    analyze: async () => analysis
+  });
+  const second = await store.ingest({
+    principal: 'token:test',
+    requestId: 'req-2',
+    payloadHash: 'sha256:req2',
+    source: {
+      ...source,
+      canonicalUrl: 'https://example.com/article',
+      extractedText: 'Second wrapper body with changed article text.',
+      contentHash: 'sha256:second-wrapper'
+    },
+    analyze: async () => analysis
+  });
+  const row = db.prepare('SELECT supersedes_item_id FROM items WHERE id = ?').get(second.item_id) as { supersedes_item_id: string };
+
+  assert.notEqual(first.item_id, second.item_id);
+  assert.equal(second.dedupe_status, 'content_changed');
+  assert.equal(row.supersedes_item_id, first.item_id);
+});

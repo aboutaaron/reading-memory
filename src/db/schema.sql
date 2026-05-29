@@ -79,6 +79,19 @@ CREATE TABLE IF NOT EXISTS activity_log (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS brief_events (
+  id TEXT PRIMARY KEY,
+  item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  brief_date TEXT NOT NULL,
+  event_kind TEXT NOT NULL CHECK (event_kind IN ('included', 'skipped', 'resurfaced')),
+  included_bool INTEGER NOT NULL CHECK (included_bool IN (0, 1)),
+  rationale TEXT NOT NULL,
+  source_context TEXT NOT NULL DEFAULT '',
+  resurface_after TEXT,
+  created_at TEXT NOT NULL,
+  UNIQUE (item_id, brief_date, event_kind, source_context)
+);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS item_fts USING fts5(
   item_id UNINDEXED,
   title,
@@ -89,6 +102,10 @@ CREATE VIRTUAL TABLE IF NOT EXISTS item_fts USING fts5(
 
 CREATE INDEX IF NOT EXISTS idx_items_ingested_at ON items(ingested_at);
 CREATE INDEX IF NOT EXISTS idx_items_source_uri ON items(source_uri);
+CREATE INDEX IF NOT EXISTS idx_items_canonical_url ON items(canonical_url);
+CREATE INDEX IF NOT EXISTS idx_items_final_url ON items(final_url);
 CREATE INDEX IF NOT EXISTS idx_analyses_item_id ON analyses(item_id);
 CREATE INDEX IF NOT EXISTS idx_activity_log_created_at ON activity_log(created_at);
 CREATE INDEX IF NOT EXISTS idx_idempotency_expires_at ON idempotency_keys(expires_at);
+CREATE INDEX IF NOT EXISTS idx_brief_events_item_date ON brief_events(item_id, brief_date);
+CREATE INDEX IF NOT EXISTS idx_brief_events_resurface_after ON brief_events(resurface_after);

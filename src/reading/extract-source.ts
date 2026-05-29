@@ -16,10 +16,11 @@ export async function extractSource(request: IngestRequest, signal?: AbortSignal
       throw new ApiError('PAYLOAD_TOO_LARGE', 'Text source exceeds character limit', 413);
     }
     const normalized = normalizeContent(request.source.text);
+    const canonicalUrl = extractCanonicalUrlFromText(request.source.text);
     return {
       sourceType: 'text' as const,
       sourceUri: null,
-      canonicalUrl: null,
+      canonicalUrl,
       finalUrl: null,
       title: request.source.title ?? null,
       extractedText: normalized.text,
@@ -84,4 +85,31 @@ function canonicalizeUrl(input: string): string {
   }
   url.hash = '';
   return url.toString();
+}
+
+function extractCanonicalUrlFromText(input: string): string | null {
+  const patterns = [
+    /view (?:this|the) (?:post|article|newsletter|email)[^\n]*?\b(?:at|on)\s+(https?:\/\/\S+)/i,
+    /read (?:this|the) (?:post|article|newsletter)[^\n]*?\b(?:at|on)\s+(https?:\/\/\S+)/i,
+    /canonical(?:\s+url)?\s*[:=]\s*(https?:\/\/\S+)/i,
+    /\bsource\s*[:=]\s*(https?:\/\/\S+)/i
+  ];
+
+  for (const pattern of patterns) {
+    const match = input.match(pattern);
+    const candidate = match?.[1] ? cleanUrl(match[1]) : null;
+    if (candidate) {
+      try {
+        return canonicalizeUrl(candidate);
+      } catch {
+        return null;
+      }
+    }
+  }
+
+  return null;
+}
+
+function cleanUrl(input: string) {
+  return input.replace(/[)\].,;!?'"<>]+$/g, '');
 }

@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { statfsSync } from 'node:fs';
+import { existsSync, readdirSync, statfsSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 import * as v from 'valibot';
 import type { AppConfig } from '../config.js';
 import { LIMITS } from '../config.js';
@@ -203,7 +204,62 @@ function health(db: Database, config: AppConfig) {
     status: freeBytes < LIMITS.minDiskFreeBytes ? 'danger' : 'ok',
     ready: freeBytes >= LIMITS.minDiskFreeBytes,
     db: 'ok',
-    disk: { free_bytes: freeBytes, warn: freeBytes < LIMITS.warnDiskFreeBytes }
+    disk: { free_bytes: freeBytes, warn: freeBytes < LIMITS.warnDiskFreeBytes },
+    backup: backupHealth(config)
+  };
+}
+
+type BackupHealth = {
+  status: 'ok' | 'stale' | 'missing' | 'unknown';
+  warn: boolean;
+  last_backup_at?: string;
+  age_seconds?: number;
+};
+
+// Reports backup recency by inspecting `${READING_API_BACKUP_DIR}/reading-*.sqlite`.
+// `missing` covers both no directory and an empty directory — the same surface
+// for "you've never backed up here". `stale` fires if the newest backup is
+// older than the daily-timer threshold + slop. `unknown` is reserved for
+// filesystem errors so the health endpoint stays informative without falling
+// over.
+function backupHealth(config: AppConfig): BackupHealth {
+  if (!existsSync(config.backupDir)) {
+    return { status: 'missing', warn: false };
+  }
+
+  let entries: string[];
+  try {
+    entries = readdirSync(config.backupDir);
+  } catch {
+    return { status: 'unknown', warn: false };
+  }
+
+  const candidates = entries.filter((name) => name.startsWith('reading-') && name.endsWith('.sqlite'));
+  if (candidates.length === 0) {
+    return { status: 'missing', warn: false };
+  }
+
+  let newestMtime = 0;
+  for (const name of candidates) {
+    try {
+      const mtime = statSync(join(config.backupDir, name)).mtimeMs;
+      if (mtime > newestMtime) newestMtime = mtime;
+    } catch {
+      // Skip files we can't stat; keep scanning the rest.
+    }
+  }
+
+  if (newestMtime === 0) {
+    return { status: 'unknown', warn: false };
+  }
+
+  const ageSeconds = Math.max(0, Math.round((Date.now() - newestMtime) / 1000));
+  const stale = ageSeconds > LIMITS.staleBackupSeconds;
+  return {
+    status: stale ? 'stale' : 'ok',
+    warn: stale,
+    last_backup_at: new Date(newestMtime).toISOString(),
+    age_seconds: ageSeconds
   };
 }
 

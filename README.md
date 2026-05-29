@@ -31,6 +31,22 @@ npx github:aboutaaron/reading-memory setup --target env
 
 Use `--dry-run` to inspect the files it would create.
 
+Re-running `setup` is safe. The command preserves the existing bearer token and any extra keys you have added to the env file — provider base-URL overrides, custom Flue model pinning, anything you tuned by hand. Only the keys `setup` owns (URL, token, host, port, paths) are rewritten.
+
+### Routing Flue Analysis Through A Proxy
+
+Flue analysis calls the underlying LLM provider directly. If you need that traffic to flow through a corporate proxy, Cloudflare AI Gateway, or a self-hosted gateway (rather than the public provider URL), set a per-provider `<PROVIDER>_BASE_URL` env var alongside `READING_API_FLUE_MODEL`. The override is applied after the model is resolved.
+
+```bash
+# Route anthropic/* models through your proxy (matches the Anthropic SDK convention).
+ANTHROPIC_BASE_URL=https://your-anthropic-proxy.example.com
+
+# Route openai/* models the same way.
+OPENAI_BASE_URL=https://your-openai-proxy.example.com
+```
+
+The env var name is derived from the resolved provider: hyphens become underscores, uppercased, suffixed with `_BASE_URL`. So `cloudflare-ai-gateway/...` reads from `CLOUDFLARE_AI_GATEWAY_BASE_URL`. See `.env.example` for more.
+
 ## Workflow
 
 | Agent need | Reading Memory path |
@@ -65,6 +81,14 @@ READING_API_TOKEN=<same token used by the service>
 ```
 
 The skill gives the calling agent the operating rule: ingest durable reading material, query before answering recall-heavy questions, use `/brief-guide` when preparing digests or reading roundups, and record final digest outcomes with `/brief-events`.
+
+### Claude Code Slash Commands
+
+For the `claude-code` target, setup also installs any markdown files under `.agents/commands/` to `~/.claude/commands/`. Currently bundled:
+
+- `/reading:status` — read-only health check. Verifies env vars, hits `GET /health`, and reports a one-line status. Use when ingest or query is failing, or any time you need to confirm the service is reachable before relying on it.
+
+Codex and OpenClaw use different surfaces for user-invocable commands; the `--target codex` and `--target openclaw` installs skip the commands directory by design.
 
 ## What It Is
 
@@ -129,7 +153,7 @@ SQLite stores the corpus facts and Flue session state
 Later, agents query the corpus for recall, brief prep, or synthesis
 ```
 
-The TypeScript service owns the reliability work: HTTP contracts, auth, URL/PDF extraction, SSRF protections, content hashes, idempotency, SQLite persistence, query, backups, and systemd deployment.
+The TypeScript service owns the reliability work: HTTP contracts, auth, URL/PDF extraction, SSRF protections, content hashes, idempotency, SQLite persistence, query, backups, and `systemd` (Linux) / `launchd` (macOS) deployment.
 
 Flue owns the judgment boundary: invoking the reading skill, producing structured output, and persisting session state.
 

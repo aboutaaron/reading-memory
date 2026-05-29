@@ -1,8 +1,10 @@
 #!/usr/bin/env node
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
+
+import { mergeEnvFile, parseEnvKeys } from './lib/env-file.mjs';
 
 const root = resolve(dirname(new URL(import.meta.url).pathname), '..');
 const args = process.argv.slice(2);
@@ -89,10 +91,36 @@ function copySkill(target, dryRun) {
   return destination;
 }
 
-function existingToken(envFile) {
-  if (!existsSync(envFile)) return null;
-  const match = readFileSync(envFile, 'utf8').match(/^READING_API_TOKEN=(.+)$/m);
-  return match?.[1] ?? null;
+function copyCommands(target, dryRun) {
+  // Slash commands are a Claude Code primitive (markdown files under
+  // ~/.claude/commands/<name>.md → /<name>). Codex and OpenClaw don't have an
+  // equivalent surface, so we install commands only for the claude-code target.
+  if (target !== 'claude-code') return [];
+
+  const sourceDir = join(root, '.agents', 'commands');
+  if (!existsSync(sourceDir)) return [];
+
+  const destDir = join(homedir(), '.claude', 'commands');
+  ensureDir(destDir, dryRun);
+
+  const installed = [];
+  for (const name of readdirSync(sourceDir)) {
+    if (!name.endsWith('.md')) continue;
+    const source = join(sourceDir, name);
+    const destination = join(destDir, name);
+    if (dryRun) {
+      console.log(`would copy command: ${source} -> ${destination}`);
+    } else {
+      writeFileSync(destination, readFileSync(source, 'utf8'));
+    }
+    installed.push(destination);
+  }
+  return installed;
+}
+
+function readEnvFile(envFile) {
+  if (!existsSync(envFile)) return '';
+  return readFileSync(envFile, 'utf8');
 }
 
 function setup() {
@@ -115,21 +143,29 @@ function setup() {
   const url = readOption('--url', 'http://127.0.0.1:4727');
   const envFile = resolve(expandHome(readOption('--env-file', '~/.reading-api/env')));
   const dataDir = dirname(envFile);
-  const token = readOption('--token', existingToken(envFile) ?? randomUUID());
 
-  const env = [
-    `READING_MEMORY_URL=${url}`,
-    `READING_API_TOKEN=${token}`,
-    'READING_API_HOST=127.0.0.1',
-    `READING_API_PORT=${new URL(url).port || '4727'}`,
-    `READING_API_DATA_DIR=${dataDir}`,
-    `READING_API_DB=${join(dataDir, 'reading.sqlite')}`,
-    `READING_API_FLUE_TRACE_PATH=${join(dataDir, 'flue-events.jsonl')}`,
-    ''
-  ].join('\n');
+  const existingContent = readEnvFile(envFile);
+  const existingKeys = parseEnvKeys(existingContent);
+  // Treat an empty `READING_API_TOKEN=` as missing — keeping it would write a
+  // blank token back to disk, and `requireAuth` rejects every request when the
+  // configured token is empty (503). Generate a fresh UUID instead.
+  const token = readOption('--token', existingKeys.READING_API_TOKEN || randomUUID());
+
+  const ownedValues = {
+    READING_MEMORY_URL: url,
+    READING_API_TOKEN: token,
+    READING_API_HOST: '127.0.0.1',
+    READING_API_PORT: new URL(url).port || '4727',
+    READING_API_DATA_DIR: dataDir,
+    READING_API_DB: join(dataDir, 'reading.sqlite'),
+    READING_API_FLUE_TRACE_PATH: join(dataDir, 'flue-events.jsonl')
+  };
+
+  const env = mergeEnvFile(existingContent, ownedValues);
 
   writePrivateFile(envFile, env, dryRun);
   const skillPath = target === 'env' ? null : copySkill(target, dryRun);
+  const commandPaths = copyCommands(target, dryRun);
 
   console.log(`Reading Memory setup ${dryRun ? 'checked' : 'complete'}.
 
@@ -137,7 +173,10 @@ Env:
   ${envFile}
 ${skillPath ? `
 Skill:
-  ${skillPath}` : ''}
+  ${skillPath}` : ''}${commandPaths.length > 0 ? `
+
+Commands:
+${commandPaths.map((path) => `  ${path}`).join('\n')}` : ''}
 
 Agent environment:
   source ${envFile}

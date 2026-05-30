@@ -76,3 +76,17 @@ test('capture rows are not treated as external-action verification', async () =>
   assert.equal(state.pending_external_actions.length, 1);
   assert.equal(state.next_step, 'verify external actions');
 });
+
+test('considered sources without decisions remain pending recovery work', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'run-ledger-resume-'));
+  const { run_dir: runDir } = await createRunLedger({ root, workflow: 'newsletter_triage', runId: 'pending-decision' });
+
+  await appendRunEvent({ runDir, kind: 'source_considered', payload: { source_id: 'email_1', label: 'Needs decision' } });
+
+  const state = await deriveRunState(runDir);
+
+  assert.equal(state.status, 'active');
+  assert.equal(state.pending_decisions.length, 1);
+  assert.equal(state.pending_decisions[0].source_id, 'email_1');
+  assert.equal(state.next_step, 'record pending decisions');
+});

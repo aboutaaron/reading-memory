@@ -99,6 +99,28 @@ test('unknown event kinds and raw content fields are rejected', async () => {
   );
 });
 
+test('privacy guard rejects documented aliases and nested raw content', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'run-ledger-'));
+  const { run_dir: runDir } = await createRunLedger({ root, workflow: 'newsletter_triage', runId: 'triage-privacy' });
+
+  for (const key of ['body', 'text', 'html', 'content', 'raw_text', 'model_output']) {
+    await assert.rejects(
+      appendRunEvent({ runDir, kind: 'source_considered', payload: { source_id: `email_${key}`, nested: [{ [key]: 'private' }] } }),
+      /raw-content-like field/
+    );
+  }
+});
+
+test('privacy guard rejects overlong string fields', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'run-ledger-'));
+  const { run_dir: runDir } = await createRunLedger({ root, workflow: 'newsletter_triage', runId: 'triage-long' });
+
+  await assert.rejects(
+    appendRunEvent({ runDir, kind: 'source_considered', payload: { source_id: 'email_1', label: 'x'.repeat(2001) } }),
+    /too long/
+  );
+});
+
 test('create rejects raw content in inputs before writing a ledger', async () => {
   const root = await mkdtemp(join(tmpdir(), 'run-ledger-'));
 

@@ -1,0 +1,63 @@
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { join } from 'node:path';
+import { test } from 'node:test';
+import { tmpdir } from 'node:os';
+import { mkdtemp } from 'node:fs/promises';
+
+const script = new URL('./run-ledger.mjs', import.meta.url).pathname;
+
+test('CLI create, append, status, and JSON status work together', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'run-ledger-cli-'));
+  const create = runCli([
+    'create',
+    '--root', root,
+    '--workflow', 'newsletter_triage',
+    '--run-id', 'cli-run',
+    '--input-json', '{"mailbox":"newsletters"}'
+  ]);
+  assert.equal(create.status, 0, create.stderr);
+  const created = JSON.parse(create.stdout);
+  assert.equal(created.ok, true);
+  assert.equal(created.run_id, 'cli-run');
+
+  const append = runCli([
+    'append',
+    '--run', created.run_dir,
+    '--event-kind', 'source_considered',
+    '--payload-json', '{"source_id":"email_1","label":"CLI source"}'
+  ]);
+  assert.equal(append.status, 0, append.stderr);
+  assert.equal(JSON.parse(append.stdout).event.kind, 'source_considered');
+
+  const status = runCli(['status', '--run', created.run_dir]);
+  assert.equal(status.status, 0, status.stderr);
+  assert.match(status.stdout, /Run: cli-run/);
+  assert.match(status.stdout, /Pending decisions: 1/);
+
+  const jsonStatus = runCli(['status', '--run', created.run_dir, '--json']);
+  assert.equal(jsonStatus.status, 0, jsonStatus.stderr);
+  assert.equal(JSON.parse(jsonStatus.stdout).state.next_step, 'record pending decisions');
+});
+
+test('CLI reports invalid JSON and missing arguments with non-zero exit', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'run-ledger-cli-'));
+  const invalidJson = runCli([
+    'create',
+    '--root', root,
+    '--workflow', 'newsletter_triage',
+    '--input-json', '{not-json}'
+  ]);
+  assert.notEqual(invalidJson.status, 0);
+  assert.match(invalidJson.stderr, /--input-json must be valid JSON/);
+
+  const missingRun = runCli(['status']);
+  assert.notEqual(missingRun.status, 0);
+  assert.match(missingRun.stderr, /--run is required/);
+});
+
+function runCli(args) {
+  return spawnSync(process.execPath, [script, ...args], {
+    encoding: 'utf8'
+  });
+}

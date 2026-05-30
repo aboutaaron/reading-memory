@@ -99,6 +99,34 @@ test('unknown event kinds and raw content fields are rejected', async () => {
   );
 });
 
+test('event vocabulary rejects accidental drift and allows explicit custom extensions', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'run-ledger-'));
+  const { run_dir: runDir } = await createRunLedger({ root, workflow: 'newsletter_triage', runId: 'vocabulary' });
+
+  await assert.rejects(
+    appendRunEvent({ runDir, kind: 'decision_recorded', payload: { source_id: 'email_1', decision: 'maybe later' } }),
+    /decision must be one of/
+  );
+  await assert.rejects(
+    appendRunEvent({ runDir, kind: 'external_action_recorded', payload: { action: 'delete_forever' } }),
+    /action must be one of/
+  );
+
+  await appendRunEvent({
+    runDir,
+    kind: 'source_considered',
+    payload: { source_id: 'source_1', source_kind: 'custom:rss_item', label: 'RSS source' }
+  });
+  await appendRunEvent({
+    runDir,
+    kind: 'decision_recorded',
+    payload: { source_id: 'source_1', decision: 'custom:park_for_digest', rationale: 'Useful later' }
+  });
+
+  const state = await deriveRunState(runDir);
+  assert.equal(state.completed_decisions[0].decision, 'custom:park_for_digest');
+});
+
 test('privacy guard rejects documented aliases and nested raw content', async () => {
   const root = await mkdtemp(join(tmpdir(), 'run-ledger-'));
   const { run_dir: runDir } = await createRunLedger({ root, workflow: 'newsletter_triage', runId: 'triage-privacy' });

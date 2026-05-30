@@ -43,6 +43,12 @@ npm run run-ledger -- status \
   --run ~/.reading-api/runs/newsletter_triage/<run_id>
 ```
 
+Discover the machine-readable contract:
+
+```bash
+npm run run-ledger -- schema
+```
+
 ## Event Vocabulary
 
 The event log is append-only. Use these event names:
@@ -73,6 +79,8 @@ Common payload fields:
 | `status` | Verification or action state, such as `pending` or `verified` |
 
 The helper rejects raw-content-like payload keys such as `body`, `text`, `html`, `content`, `raw_text`, and `model_output`. Store lightweight identity and rationale, not rejected source text.
+
+Use the documented vocabulary exactly. Workflow-specific extensions must use `custom:<lowercase-slug>` so a fresh agent can distinguish deliberate extension from typos or drift.
 
 ## Newsletter Triage
 

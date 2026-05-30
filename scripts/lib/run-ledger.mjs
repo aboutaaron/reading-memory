@@ -15,6 +15,47 @@ export const RUN_LEDGER_EVENTS = [
   'run_completed'
 ];
 
+export const RUN_LEDGER_SOURCE_KINDS = [
+  'newsletter',
+  'url',
+  'pdf',
+  'manual',
+  'brief_candidate'
+];
+
+export const RUN_LEDGER_DECISIONS = [
+  'read',
+  'skim',
+  'done',
+  'save',
+  'reject',
+  'defer',
+  'included',
+  'skipped',
+  'saved_for_later',
+  'duplicate',
+  'already_known',
+  'outside_focus',
+  'unsafe_private'
+];
+
+export const RUN_LEDGER_EXTERNAL_ACTIONS = [
+  'archive',
+  'restore',
+  'mark_done',
+  'label',
+  'unlabel',
+  'move',
+  'none'
+];
+
+export const RUN_LEDGER_STATUSES = [
+  'pending',
+  'verified',
+  'failed',
+  'skipped'
+];
+
 const REQUIRED_EVENT_FIELDS = {
   run_started: [],
   source_considered: ['source_id'],
@@ -40,6 +81,20 @@ const RAW_CONTENT_KEYS = new Set([
   'text',
   'transcript'
 ]);
+
+export const RUN_LEDGER_SCHEMA = {
+  events: RUN_LEDGER_EVENTS,
+  required_event_fields: REQUIRED_EVENT_FIELDS,
+  source_kinds: RUN_LEDGER_SOURCE_KINDS,
+  decisions: RUN_LEDGER_DECISIONS,
+  external_actions: RUN_LEDGER_EXTERNAL_ACTIONS,
+  statuses: RUN_LEDGER_STATUSES,
+  extension_rule: 'Use custom:<lowercase-slug> for workflow-specific source kinds, decisions, external actions, or statuses.',
+  privacy: {
+    max_string_length: 2000,
+    rejected_payload_keys: [...RAW_CONTENT_KEYS].sort()
+  }
+};
 
 export function defaultRunRoot() {
   return join(process.env.READING_API_DATA_DIR ?? join(homedir(), '.reading-api'), 'runs');
@@ -267,6 +322,10 @@ export function assertEventPayload(kind, payload) {
   if (missing.length > 0) {
     throw new Error(`${kind} requires payload field${missing.length === 1 ? '' : 's'}: ${missing.join(', ')}`);
   }
+  validateVocabularyField(payload, 'source_kind', RUN_LEDGER_SOURCE_KINDS);
+  validateVocabularyField(payload, 'decision', RUN_LEDGER_DECISIONS);
+  validateVocabularyField(payload, 'action', RUN_LEDGER_EXTERNAL_ACTIONS);
+  validateVocabularyField(payload, 'status', RUN_LEDGER_STATUSES);
 }
 
 export function assertNoRawContent(value, path = []) {
@@ -309,6 +368,14 @@ function assertRunId(runId) {
   if (!runId || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(runId) || runId === '.' || runId === '..') {
     throw new Error('run_id must be 1-128 path-safe letters, numbers, dots, underscores, or hyphens');
   }
+}
+
+function validateVocabularyField(payload, field, allowedValues) {
+  const value = stringValue(payload[field]);
+  if (!value) return;
+  if (allowedValues.includes(value)) return;
+  if (/^custom:[a-z][a-z0-9_-]{1,63}$/.test(value)) return;
+  throw new Error(`${field} must be one of ${allowedValues.join(', ')} or custom:<slug>`);
 }
 
 function assertPlainRecord(value, label) {

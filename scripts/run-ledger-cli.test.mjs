@@ -56,6 +56,18 @@ test('CLI reports invalid JSON and missing arguments with non-zero exit', async 
   assert.match(missingRun.stderr, /--run is required/);
 });
 
+test('CLI exposes machine-readable schema for agents', () => {
+  const result = runCli(['schema']);
+  assert.equal(result.status, 0, result.stderr);
+  const body = JSON.parse(result.stdout);
+
+  assert.equal(body.ok, true);
+  assert.deepEqual(body.schema.required_event_fields.decision_recorded, ['source_id', 'decision']);
+  assert.ok(body.schema.decisions.includes('skim'));
+  assert.ok(body.schema.external_actions.includes('archive'));
+  assert.match(body.schema.extension_rule, /custom:<lowercase-slug>/);
+});
+
 test('CLI rejects scalar and array payload JSON before persistence', async () => {
   const root = await mkdtemp(join(tmpdir(), 'run-ledger-cli-'));
   const create = runCli([

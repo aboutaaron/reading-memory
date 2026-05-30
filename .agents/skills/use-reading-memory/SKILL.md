@@ -150,9 +150,12 @@ Use the helper:
 npm run run-ledger -- create --workflow newsletter_triage --input-json '{"mailbox":"newsletters"}'
 npm run run-ledger -- append --run <run-dir> --event-kind source_considered --payload-json '{"source_id":"email_123","source_kind":"newsletter","label":"Example"}'
 npm run run-ledger -- status --run <run-dir>
+npm run run-ledger -- schema
 ```
 
 Run ledgers reject raw-content-like fields such as `body`, `text`, `html`, `content`, and `model_output`. Store lightweight identity, short rationale, action ids, and Reading Memory item ids. Do not store full rejected newsletter content, private headers, unsubscribe URLs, or raw model output.
+
+Use the schema command when unsure of allowed event names, required payload fields, decisions, source kinds, action names, or statuses. If a workflow needs a new value, use `custom:<lowercase-slug>` rather than inventing a bare vocabulary term.
 
 If resuming, inspect `run.md` or run `npm run run-ledger -- status -- --run <run-dir>`. Handle pending external-action verification before making new decisions. A `memory_capture_recorded` item id is not proof that inbox actions finished.
 

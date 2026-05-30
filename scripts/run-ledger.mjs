@@ -4,6 +4,7 @@ import {
   createRunLedger,
   defaultRunRoot,
   deriveRunState,
+  RUN_LEDGER_SCHEMA,
   resolveRunDir
 } from './lib/run-ledger.mjs';
 
@@ -32,8 +33,10 @@ try {
     } else {
       printStatus(state);
     }
+  } else if (command === 'schema') {
+    console.log(JSON.stringify({ ok: true, schema: RUN_LEDGER_SCHEMA }, null, 2));
   } else {
-    throw new Error('Usage: run-ledger <create|append|status> [options]');
+    throw new Error('Usage: run-ledger <create|append|status|schema> [options]');
   }
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);

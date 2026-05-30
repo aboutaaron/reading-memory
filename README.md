@@ -83,7 +83,7 @@ READING_API_TOKEN=<same token used by the service>
 
 The skill gives the calling agent the operating rule: ingest durable reading material, query before answering recall-heavy questions, use `/brief-guide` when preparing digests or reading roundups, and record final digest outcomes with `/brief-events`.
 
-For multi-step workflows such as newsletter triage, agents should also create a local run ledger. Run ledgers store operational state — considered sources, read/skim/done decisions, archive/restore actions, captures, and verification — without turning rejected source content into corpus memory. See [docs/run-ledgers.md](docs/run-ledgers.md).
+For multi-step workflows such as newsletter triage, agents should also create a local run ledger. Run ledgers store operational state — considered sources, read/skim/done decisions, archive/restore actions, captures, and verification — without turning rejected source content into corpus memory. `npm run run-ledger -- schema` exposes the machine-readable event contract for calling agents. See [docs/run-ledgers.md](docs/run-ledgers.md).
 
 ### Claude Code Slash Commands
 

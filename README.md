@@ -55,6 +55,7 @@ The env var name is derived from the resolved provider: hyphens become underscor
 | Answer from previously saved reading material | `POST /query` |
 | Choose sources for a digest or reading roundup | `POST /brief-guide` |
 | Record what a digest or brief used or skipped | `POST /brief-events` |
+| Resume a multi-step reading workflow after interruption | run ledger files + `npm run run-ledger` |
 | Inspect model judgment and failures | local SQLite + Flue traces |
 
 The calling agent owns the user interaction. Reading Memory is the durable subsystem it calls when current context is not enough.
@@ -81,6 +82,8 @@ READING_API_TOKEN=<same token used by the service>
 ```
 
 The skill gives the calling agent the operating rule: ingest durable reading material, query before answering recall-heavy questions, use `/brief-guide` when preparing digests or reading roundups, and record final digest outcomes with `/brief-events`.
+
+For multi-step workflows such as newsletter triage, agents should also create a local run ledger. Run ledgers store operational state — considered sources, read/skim/done decisions, archive/restore actions, captures, and verification — without turning rejected source content into corpus memory. See [docs/run-ledgers.md](docs/run-ledgers.md).
 
 ### Claude Code Slash Commands
 
@@ -130,6 +133,7 @@ Good callers use it like a capture substrate:
 2. Ingest only when the material has durable value or adds a materially new angle.
 3. Use `dedupe_status`, `related_items`, tags, and relationships to merge, cite, or link the item in the caller's own workflow.
 4. After a digest or brief is finalized, record included/skipped outcomes so future source selection can avoid stale repeats.
+5. For workflows with many sources or external actions, keep a run ledger so another agent can resume from explicit state instead of chat history.
 
 Reading Memory does not edit your notes, project files, or brief output directly. It preserves the corpus evidence and exposes enough structure for the calling agent to decide what to do next.
 

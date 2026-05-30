@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { tmpdir } from 'node:os';
@@ -111,4 +111,66 @@ test('create rejects raw content in inputs before writing a ledger', async () =>
     }),
     /raw-content-like field/
   );
+});
+
+test('create refuses duplicate run ids without overwriting existing ledger files', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'run-ledger-'));
+  const first = await createRunLedger({
+    root,
+    workflow: 'newsletter_triage',
+    runId: 'duplicate-run',
+    inputs: { mailbox: 'original' }
+  });
+  await writeFile(join(first.run_dir, 'outputs.json'), JSON.stringify({
+    run_id: 'duplicate-run',
+    workflow: 'newsletter_triage',
+    status: 'active',
+    completed_at: null,
+    summary: 'preserve me'
+  }, null, 2));
+
+  await assert.rejects(
+    createRunLedger({
+      root,
+      workflow: 'newsletter_triage',
+      runId: 'duplicate-run',
+      inputs: { mailbox: 'replacement' }
+    }),
+    /already exists/
+  );
+
+  assert.equal(JSON.parse(await readFile(join(first.run_dir, 'inputs.json'), 'utf8')).inputs.mailbox, 'original');
+  assert.equal(JSON.parse(await readFile(join(first.run_dir, 'outputs.json'), 'utf8')).summary, 'preserve me');
+});
+
+test('create rejects run ids that are not safe path segments', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'run-ledger-'));
+
+  for (const runId of ['../outside', '/absolute', '..', '.', 'nested/path']) {
+    await assert.rejects(
+      createRunLedger({ root, workflow: 'newsletter_triage', runId }),
+      /run_id must be/
+    );
+  }
+});
+
+test('completion replays from events when outputs are stale', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'run-ledger-'));
+  const { run_dir: runDir } = await createRunLedger({ root, workflow: 'newsletter_triage', runId: 'event-complete' });
+  await appendRunEvent({ runDir, kind: 'source_considered', payload: { source_id: 'email_1' } });
+  await appendRunEvent({ runDir, kind: 'decision_recorded', payload: { source_id: 'email_1', decision: 'done', rationale: 'No durable value' } });
+  await appendRunEvent({ runDir, kind: 'run_completed', payload: { summary: 'Completed in event log.' } });
+  await writeFile(join(runDir, 'outputs.json'), JSON.stringify({
+    run_id: 'event-complete',
+    workflow: 'newsletter_triage',
+    status: 'active',
+    completed_at: null,
+    summary: null
+  }, null, 2));
+
+  const state = await deriveRunState(runDir);
+
+  assert.equal(state.status, 'completed');
+  assert.equal(state.summary, 'Completed in event log.');
+  assert.equal(state.next_step, 'done');
 });

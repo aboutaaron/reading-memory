@@ -42,8 +42,12 @@ export async function createRunLedger({
   now = new Date()
 }) {
   assertWorkflow(workflow);
+  assertRunId(runId);
   assertNoRawContent(inputs, ['inputs']);
   const runDir = join(root, workflow, runId);
+  if (existsSync(runDir)) {
+    throw new Error(`Run ledger already exists: ${runDir}`);
+  }
   await mkdir(runDir, { recursive: true, mode: 0o700 });
 
   const inputDocument = {
@@ -104,6 +108,8 @@ export async function deriveRunState(runDir) {
   const externalActions = new Map();
   const verifiedActionIds = new Set();
   const capturedItemIds = [];
+  let completedAt = outputs.completed_at ?? null;
+  let completionSummary = outputs.summary ?? null;
 
   for (const event of events) {
     const payload = event.payload ?? {};
@@ -149,6 +155,11 @@ export async function deriveRunState(runDir) {
       const actionId = stringValue(payload.action_id);
       if (actionId) verifiedActionIds.add(actionId);
     }
+
+    if (event.kind === 'run_completed') {
+      completedAt = event.ts;
+      completionSummary = stringValue(payload.summary) ?? completionSummary;
+    }
   }
 
   for (const actionId of verifiedActionIds) {
@@ -160,7 +171,8 @@ export async function deriveRunState(runDir) {
   const pendingDecisions = sourceList.filter((source) => source.considered && !source.decision);
   const completedDecisions = sourceList.filter((source) => Boolean(source.decision));
   const pendingExternalActions = [...externalActions.values()].filter((action) => action.status !== 'verified');
-  const completed = outputs.status === 'completed' && pendingDecisions.length === 0 && pendingExternalActions.length === 0;
+  const hasCompletionEvent = completedAt !== null;
+  const completed = hasCompletionEvent && pendingDecisions.length === 0 && pendingExternalActions.length === 0;
 
   return {
     run_dir: runDir,
@@ -168,7 +180,8 @@ export async function deriveRunState(runDir) {
     workflow: inputs.workflow,
     status: completed ? 'completed' : 'active',
     created_at: inputs.created_at,
-    completed_at: outputs.completed_at,
+    completed_at: completedAt,
+    summary: completionSummary,
     event_count: events.length,
     sources: sourceList,
     completed_decisions: completedDecisions,
@@ -258,6 +271,12 @@ function generateRunId(workflow) {
 function assertWorkflow(workflow) {
   if (!workflow || !/^[a-z][a-z0-9_-]{1,63}$/.test(workflow)) {
     throw new Error('workflow must be 2-64 lowercase letters, numbers, underscores, or hyphens');
+  }
+}
+
+function assertRunId(runId) {
+  if (!runId || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(runId) || runId === '.' || runId === '..') {
+    throw new Error('run_id must be 1-128 path-safe letters, numbers, dots, underscores, or hyphens');
   }
 }
 

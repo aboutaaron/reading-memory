@@ -9,6 +9,8 @@ Use Reading Memory when a local agent needs durable recall for articles, newslet
 
 Reading Memory is a local HTTP service. It does not talk to the user directly. You decide when to call it, then use the returned evidence in your own response.
 
+For multi-step reading workflows such as newsletter triage, also use a run ledger. The ledger records operational state — considered sources, decisions, archive/restore actions, Reading Memory captures, and verification — so a fresh agent can resume after compaction or handoff. The corpus stores durable reading material; the run ledger stores what the workflow did.
+
 ## Required Environment
 
 - `READING_MEMORY_URL`: base URL, usually `http://127.0.0.1:4727`
@@ -129,6 +131,33 @@ Minimal brief event:
 Use a fresh `request_id` for each new operation. Reuse the same `request_id` only when intentionally retrying the same request.
 
 `dedupe_status` is `created` for new writes, `idempotent_replay` when the same `request_id` safely replays, and `existing` when an equivalent event was already recorded.
+
+## When To Use Run Ledgers
+
+Create a run ledger before a reading workflow if it has multiple sources, external actions, or verification steps. Newsletter cleanup is the main case:
+
+1. Create a `newsletter_triage` run.
+2. Record `source_considered` for each newsletter entering the decision set.
+3. Record `decision_recorded` for read, skim, done, save, reject, or defer choices.
+4. Record `memory_capture_recorded` with the returned `item_id` when you ingest into Reading Memory.
+5. Record `external_action_recorded` for archive, restore, mark done, label, or similar actions outside Reading Memory.
+6. Record `verification_recorded` after confirming the external action landed.
+7. Record `run_completed` only when decisions and external actions are verified.
+
+Use the helper:
+
+```bash
+npm run run-ledger -- create --workflow newsletter_triage --input-json '{"mailbox":"newsletters"}'
+npm run run-ledger -- append --run <run-dir> --event-kind source_considered --payload-json '{"source_id":"email_123","source_kind":"newsletter","label":"Example"}'
+npm run run-ledger -- status --run <run-dir>
+npm run run-ledger -- schema
+```
+
+Run ledgers reject raw-content-like fields such as `body`, `text`, `html`, `content`, and `model_output`. Store lightweight identity, short rationale, action ids, and Reading Memory item ids. Do not store full rejected newsletter content, private headers, unsubscribe URLs, or raw model output.
+
+Use the schema command when unsure of allowed event names, required payload fields, decisions, source kinds, action names, or statuses. If a workflow needs a new value, use `custom:<lowercase-slug>` rather than inventing a bare vocabulary term.
+
+If resuming, inspect `run.md` or run `npm run run-ledger -- status -- --run <run-dir>`. Handle pending external-action verification before making new decisions. A `memory_capture_recorded` item id is not proof that inbox actions finished.
 
 Run the Reading Memory eval before accepting model, ranking, dedupe, or brief-guide behavior changes:
 

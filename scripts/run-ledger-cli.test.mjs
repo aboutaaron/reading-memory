@@ -56,6 +56,29 @@ test('CLI reports invalid JSON and missing arguments with non-zero exit', async 
   assert.match(missingRun.stderr, /--run is required/);
 });
 
+test('CLI rejects scalar and array payload JSON before persistence', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'run-ledger-cli-'));
+  const create = runCli([
+    'create',
+    '--root', root,
+    '--workflow', 'newsletter_triage',
+    '--run-id', 'privacy-cli'
+  ]);
+  assert.equal(create.status, 0, create.stderr);
+  const created = JSON.parse(create.stdout);
+
+  for (const payload of ['"full newsletter body"', '["full newsletter body"]']) {
+    const result = runCli([
+      'append',
+      '--run', created.run_dir,
+      '--event-kind', 'source_considered',
+      '--payload-json', payload
+    ]);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /payload must be a JSON object/);
+  }
+});
+
 function runCli(args) {
   return spawnSync(process.execPath, [script, ...args], {
     encoding: 'utf8'

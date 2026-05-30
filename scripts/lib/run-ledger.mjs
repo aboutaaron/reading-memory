@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
@@ -43,6 +43,7 @@ export async function createRunLedger({
 }) {
   assertWorkflow(workflow);
   assertRunId(runId);
+  assertPlainRecord(inputs, 'inputs');
   assertNoRawContent(inputs, ['inputs']);
   const runDir = join(root, workflow, runId);
   if (existsSync(runDir)) {
@@ -73,7 +74,9 @@ export async function createRunLedger({
 
 export async function appendRunEvent({ runDir, kind, payload = {}, now = new Date() }) {
   assertEventKind(kind);
+  assertPlainRecord(payload, 'payload');
   assertNoRawContent(payload);
+  await assertLedgerFilesSafe(runDir);
   const inputs = await readJson(join(runDir, 'inputs.json'));
   const event = {
     id: `evt_${randomUUID().replaceAll('-', '').slice(0, 20)}`,
@@ -101,6 +104,7 @@ export async function appendRunEvent({ runDir, kind, payload = {}, now = new Dat
 }
 
 export async function deriveRunState(runDir) {
+  await assertLedgerFilesSafe(runDir);
   const inputs = await readJson(join(runDir, 'inputs.json'));
   const outputs = await readJson(join(runDir, 'outputs.json'));
   const events = await readEvents(join(runDir, 'events.jsonl'));
@@ -194,6 +198,7 @@ export async function deriveRunState(runDir) {
 }
 
 export async function refreshRunMarkdown(runDir, state = null) {
+  await assertLedgerFilesSafe(runDir, { requireRunMarkdown: false });
   const resolved = state ?? await deriveRunState(runDir);
   const lines = [
     `# ${resolved.workflow} Run ${resolved.run_id}`,
@@ -249,6 +254,12 @@ export function assertNoRawContent(value, path = []) {
     for (const [index, item] of value.entries()) assertNoRawContent(item, [...path, String(index)]);
     return;
   }
+  if (typeof value === 'string') {
+    if (value.length > 2000) {
+      throw new Error(`Run ledger payload field is too long: ${path.join('.') || 'value'}`);
+    }
+    return;
+  }
   if (!value || typeof value !== 'object') return;
 
   for (const [key, child] of Object.entries(value)) {
@@ -277,6 +288,33 @@ function assertWorkflow(workflow) {
 function assertRunId(runId) {
   if (!runId || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(runId) || runId === '.' || runId === '..') {
     throw new Error('run_id must be 1-128 path-safe letters, numbers, dots, underscores, or hyphens');
+  }
+}
+
+function assertPlainRecord(value, label) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) {
+    throw new Error(`${label} must be a JSON object`);
+  }
+}
+
+async function assertLedgerFilesSafe(runDir, { requireRunMarkdown = true } = {}) {
+  const files = ['inputs.json', 'outputs.json', 'events.jsonl'];
+  if (requireRunMarkdown) files.push('run.md');
+  for (const file of files) {
+    await assertRegularFile(join(runDir, file));
+  }
+}
+
+async function assertRegularFile(path) {
+  let stat;
+  try {
+    stat = await lstat(path);
+  } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') return;
+    throw error;
+  }
+  if (stat.isSymbolicLink() || !stat.isFile()) {
+    throw new Error(`Run ledger path must be a regular file: ${path}`);
   }
 }
 

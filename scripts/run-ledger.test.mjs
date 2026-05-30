@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { tmpdir } from 'node:os';
@@ -118,6 +118,52 @@ test('privacy guard rejects overlong string fields', async () => {
   await assert.rejects(
     appendRunEvent({ runDir, kind: 'source_considered', payload: { source_id: 'email_1', label: 'x'.repeat(2001) } }),
     /too long/
+  );
+});
+
+test('create and append reject non-object JSON payloads', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'run-ledger-'));
+  const { run_dir: runDir } = await createRunLedger({ root, workflow: 'newsletter_triage', runId: 'plain-object' });
+
+  await assert.rejects(
+    createRunLedger({ root, workflow: 'newsletter_triage', runId: 'bad-scalar-input', inputs: 'full newsletter body' }),
+    /inputs must be a JSON object/
+  );
+  await assert.rejects(
+    createRunLedger({ root, workflow: 'newsletter_triage', runId: 'bad-array-input', inputs: ['full newsletter body'] }),
+    /inputs must be a JSON object/
+  );
+  await assert.rejects(
+    appendRunEvent({ runDir, kind: 'source_considered', payload: 'full newsletter body' }),
+    /payload must be a JSON object/
+  );
+  await assert.rejects(
+    appendRunEvent({ runDir, kind: 'source_considered', payload: ['full newsletter body'] }),
+    /payload must be a JSON object/
+  );
+});
+
+test('privacy guard rejects long strings nested inside arrays', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'run-ledger-'));
+  const { run_dir: runDir } = await createRunLedger({ root, workflow: 'newsletter_triage', runId: 'triage-long-array' });
+
+  await assert.rejects(
+    appendRunEvent({ runDir, kind: 'source_considered', payload: { source_id: 'email_1', snippets: ['x'.repeat(2001)] } }),
+    /too long/
+  );
+});
+
+test('append rejects symlinked ledger files before writing', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'run-ledger-'));
+  const { run_dir: runDir } = await createRunLedger({ root, workflow: 'newsletter_triage', runId: 'symlink-run' });
+  const outside = join(root, 'outside-events.jsonl');
+  await writeFile(outside, '');
+  await rm(join(runDir, 'events.jsonl'));
+  await symlink(outside, join(runDir, 'events.jsonl'));
+
+  await assert.rejects(
+    appendRunEvent({ runDir, kind: 'source_considered', payload: { source_id: 'email_1' } }),
+    /regular file/
   );
 });
 

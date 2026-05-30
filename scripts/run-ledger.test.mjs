@@ -143,6 +143,27 @@ test('create and append reject non-object JSON payloads', async () => {
   );
 });
 
+test('append rejects event payloads missing replay-critical fields', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'run-ledger-'));
+  const { run_dir: runDir } = await createRunLedger({ root, workflow: 'newsletter_triage', runId: 'required-fields' });
+
+  const cases = [
+    ['source_considered', {}, /source_considered requires payload field: source_id/],
+    ['decision_recorded', { source_id: 'email_1' }, /decision_recorded requires payload field: decision/],
+    ['decision_recorded', { decision: 'done' }, /decision_recorded requires payload field: source_id/],
+    ['external_action_recorded', { source_id: 'email_1' }, /external_action_recorded requires payload field: action/],
+    ['memory_capture_recorded', { source_id: 'email_1' }, /memory_capture_recorded requires payload field: item_id/],
+    ['verification_recorded', { status: 'verified' }, /verification_recorded requires payload field: action_id/]
+  ];
+
+  for (const [kind, payload, message] of cases) {
+    await assert.rejects(
+      appendRunEvent({ runDir, kind, payload }),
+      message
+    );
+  }
+});
+
 test('privacy guard rejects long strings nested inside arrays', async () => {
   const root = await mkdtemp(join(tmpdir(), 'run-ledger-'));
   const { run_dir: runDir } = await createRunLedger({ root, workflow: 'newsletter_triage', runId: 'triage-long-array' });

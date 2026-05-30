@@ -15,6 +15,17 @@ export const RUN_LEDGER_EVENTS = [
   'run_completed'
 ];
 
+const REQUIRED_EVENT_FIELDS = {
+  run_started: [],
+  source_considered: ['source_id'],
+  decision_recorded: ['source_id', 'decision'],
+  external_action_recorded: ['action'],
+  memory_capture_recorded: ['item_id'],
+  verification_recorded: ['action_id'],
+  run_resumed: [],
+  run_completed: []
+};
+
 const RAW_CONTENT_KEYS = new Set([
   'body',
   'content',
@@ -75,6 +86,7 @@ export async function createRunLedger({
 export async function appendRunEvent({ runDir, kind, payload = {}, now = new Date() }) {
   assertEventKind(kind);
   assertPlainRecord(payload, 'payload');
+  assertEventPayload(kind, payload);
   assertNoRawContent(payload);
   await assertLedgerFilesSafe(runDir);
   const inputs = await readJson(join(runDir, 'inputs.json'));
@@ -246,6 +258,14 @@ export async function readEvents(eventsPath) {
 export function assertEventKind(kind) {
   if (!RUN_LEDGER_EVENTS.includes(kind)) {
     throw new Error(`Unknown run-ledger event kind: ${kind}`);
+  }
+}
+
+export function assertEventPayload(kind, payload) {
+  const required = REQUIRED_EVENT_FIELDS[kind] ?? [];
+  const missing = required.filter((field) => !stringValue(payload[field]));
+  if (missing.length > 0) {
+    throw new Error(`${kind} requires payload field${missing.length === 1 ? '' : 's'}: ${missing.join(', ')}`);
   }
 }
 

@@ -1,11 +1,27 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fauxAssistantMessage, registerFauxProvider } from '@mariozechner/pi-ai';
 import { openMemoryDatabase } from '../db/connection.js';
-import { createFlueReadingAnalyzer, wrapResolveModelWithBaseUrlOverrides } from './flue-agent.js';
+import { createFlueReadingAnalyzer, flueAnalyzerHealth, wrapResolveModelWithBaseUrlOverrides } from './flue-agent.js';
+
+test('flueAnalyzerHealth reports whether the analyze-item skill is readable', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'reading-api-analyzer-health-'));
+
+  try {
+    assert.deepEqual(flueAnalyzerHealth(workspaceRoot), { status: 'unavailable', warn: true });
+
+    const skillDir = join(workspaceRoot, '.agents', 'skills', 'analyze-item');
+    await mkdir(skillDir, { recursive: true });
+    await writeFile(join(skillDir, 'SKILL.md'), '# Analyze item\n');
+
+    assert.deepEqual(flueAnalyzerHealth(workspaceRoot), { status: 'ok', warn: false });
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
 
 test('wrapResolveModelWithBaseUrlOverrides passes through when no env override is set', () => {
   const original = { id: 'claude-sonnet-4-5', provider: 'anthropic', baseUrl: 'https://api.anthropic.com' };

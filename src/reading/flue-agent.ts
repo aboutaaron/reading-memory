@@ -1,4 +1,4 @@
-import { promises as fs } from 'node:fs';
+import { accessSync, constants, promises as fs } from 'node:fs';
 import { join, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as v from 'valibot';
@@ -51,6 +51,20 @@ export type ReadingAnalyzerInput = {
 };
 
 export type ReadingAnalyzer = (input: ReadingAnalyzerInput) => Promise<Analysis>;
+
+export type AnalyzerHealth = {
+  status: 'ok' | 'unavailable';
+  warn: boolean;
+};
+
+export function flueAnalyzerHealth(workspaceRoot: string = WORKSPACE_ROOT): AnalyzerHealth {
+  try {
+    accessSync(join(workspaceRoot, '.agents', 'skills', 'analyze-item', 'SKILL.md'), constants.R_OK);
+    return { status: 'ok', warn: false };
+  } catch {
+    return { status: 'unavailable', warn: true };
+  }
+}
 
 /**
  * Wraps a Flue resolveModel with per-provider baseUrl overrides driven by env vars.

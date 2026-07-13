@@ -465,6 +465,25 @@ test('health reports backup status as missing when backup dir is absent', async 
   await new Promise<void>((resolve) => server.close(() => resolve()));
 });
 
+test('health is not ready when the analyzer skill is unavailable', async () => {
+  const db = openMemoryDatabase();
+  const dataDir = mkdtempSync(join(tmpdir(), 'reading-api-test-'));
+  const server = createReadingApi(testConfig(dataDir), db, {
+    analyzer: async ({ itemId, title, text }) => analyzeItem(db, { itemId, title, text }),
+    analyzerHealth: () => ({ status: 'unavailable', warn: true })
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const port = (server.address() as { port: number }).port;
+
+  const res = await fetch(`http://127.0.0.1:${port}/health`).then((r) => r.json() as Promise<any>);
+  assert.equal(res.data.status, 'danger');
+  assert.equal(res.data.ready, false);
+  assert.deepEqual(res.data.analyzer, { status: 'unavailable', warn: true });
+
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+});
+
 test('health reports backup status as ok when a recent backup exists', async () => {
   const db = openMemoryDatabase();
   const dataDir = mkdtempSync(join(tmpdir(), 'reading-api-test-'));

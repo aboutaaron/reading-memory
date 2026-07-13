@@ -10,17 +10,29 @@ import { requireAuth } from './auth.js';
 import { RateLimiter } from './rate-limit.js';
 import { BriefEventsRequestSchema, BriefGuideRequestSchema, IngestRequestSchema, QueryRequestSchema } from './contracts.js';
 import { ItemStore } from '../reading/item-store.js';
-import { createFlueReadingAnalyzer, type ReadingAnalyzer } from '../reading/flue-agent.js';
+import {
+  createFlueReadingAnalyzer,
+  flueAnalyzerHealth,
+  type AnalyzerHealth,
+  type ReadingAnalyzer
+} from '../reading/flue-agent.js';
 import { extractSource, payloadHash } from '../reading/extract-source.js';
 import { briefGuide } from '../reading/brief-guide.js';
 import { getItem, queryCorpus } from '../reading/corpus-query.js';
 import { BriefEventStore, briefEventsPayloadHash } from '../reading/brief-events.js';
 
-export function createReadingApi(config: AppConfig, db: Database, options: { analyzer?: ReadingAnalyzer } = {}) {
+export function createReadingApi(
+  config: AppConfig,
+  db: Database,
+  options: { analyzer?: ReadingAnalyzer; analyzerHealth?: () => AnalyzerHealth } = {}
+) {
   const limiter = new RateLimiter({ ingest: 10, query: 30, brief: 10 });
   const store = new ItemStore(db);
   const briefEventStore = new BriefEventStore(db);
   const analyzer = options.analyzer ?? createFlueReadingAnalyzer(db, { model: config.flueModel, tracePath: config.flueTracePath });
+  const analyzerHealth = options.analyzerHealth ?? (options.analyzer
+    ? () => ({ status: 'ok' as const, warn: false })
+    : flueAnalyzerHealth);
 
   return createServer(async (req, res) => {
     const requestId = req.headers['x-request-id']?.toString() ?? null;
@@ -30,7 +42,7 @@ export function createReadingApi(config: AppConfig, db: Database, options: { ana
       setSecurityHeaders(res);
 
       if (req.method === 'GET' && url.pathname === '/health') {
-        return send(res, 200, { ok: true, request_id: requestId, data: health(db, config), error: null });
+        return send(res, 200, { ok: true, request_id: requestId, data: health(db, config, analyzerHealth()), error: null });
       }
 
       const principal = requireAuth(req, config.authToken);
@@ -196,14 +208,16 @@ function capabilities() {
   };
 }
 
-function health(db: Database, config: AppConfig) {
+function health(db: Database, config: AppConfig, analyzer: AnalyzerHealth) {
   db.prepare('SELECT 1').get();
   const fs = statfsSync(config.dataDir);
   const freeBytes = Number(fs.bavail) * Number(fs.bsize);
+  const ready = freeBytes >= LIMITS.minDiskFreeBytes && analyzer.status === 'ok';
   return {
-    status: freeBytes < LIMITS.minDiskFreeBytes ? 'danger' : 'ok',
-    ready: freeBytes >= LIMITS.minDiskFreeBytes,
+    status: ready ? 'ok' : 'danger',
+    ready,
     db: 'ok',
+    analyzer,
     disk: { free_bytes: freeBytes, warn: freeBytes < LIMITS.warnDiskFreeBytes },
     backup: backupHealth(config)
   };

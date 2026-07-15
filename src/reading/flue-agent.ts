@@ -1,20 +1,17 @@
-import { accessSync, constants, promises as fs } from 'node:fs';
-import { join, posix } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import * as v from 'valibot';
-import { createFlueContext, type FlueContextConfig } from '@flue/sdk/client';
-import { resolveModel } from '@flue/sdk/internal';
-import { createSandboxSessionEnv, type SandboxApi } from '@flue/sdk/sandbox';
+import { createSandboxSessionEnv, type SandboxApi } from '@flue/runtime';
+import {
+  createFlueContext,
+  resolveModel,
+  type FlueContextConfig
+} from '@flue/runtime/internal';
 import type { Database } from '../db/connection.js';
-import { SqliteSessionStore } from '../db/sqlite-session-store.js';
 import { ApiError } from '../api/errors.js';
 import type { Analysis } from './types.js';
 import { canonicalRelationship, findRelationships } from './analyzer.js';
 import { FlueTraceLogger } from './flue-trace.js';
-import readingAgent from '../../.flue/agents/reading.js';
+import { analyzeItemSkill, createReadingAgent } from './flue-reading-agent.js';
 
-const __dirname = fileURLToPath(new URL('.', import.meta.url));
-const WORKSPACE_ROOT = join(__dirname, '..', '..');
 const VIRTUAL_ROOT = '/workspace';
 
 const FlueAnalysisSchema = v.object({
@@ -48,6 +45,8 @@ export type ReadingAnalyzerInput = {
   title: string | null;
   text: string;
   sessionId?: string;
+  /** Cancels the in-flight analysis (e.g. request deadline). Passed through to `session.skill()`. */
+  signal?: AbortSignal;
 };
 
 export type ReadingAnalyzer = (input: ReadingAnalyzerInput) => Promise<Analysis>;
@@ -57,28 +56,12 @@ export type AnalyzerHealth = {
   warn: boolean;
 };
 
-export function flueAnalyzerHealth(workspaceRoot: string = WORKSPACE_ROOT): AnalyzerHealth {
-  try {
-    accessSync(join(workspaceRoot, '.agents', 'skills', 'analyze-item', 'SKILL.md'), constants.R_OK);
-    return { status: 'ok', warn: false };
-  } catch {
-    return { status: 'unavailable', warn: true };
-  }
+export function flueAnalyzerHealth(): AnalyzerHealth {
+  return { status: 'ok', warn: false };
 }
 
 /**
- * Wraps a Flue resolveModel with per-provider baseUrl overrides driven by env vars.
- *
- * Looks up `<PROVIDER>_BASE_URL` (uppercased provider, hyphens → underscores)
- * after the underlying resolver returns a Model. If set, returns a copy of the
- * Model with `baseUrl` replaced. Standard convention: this matches the env var
- * names used by the official Anthropic and OpenAI SDKs, so users with existing
- * proxy setups (Netflix's Claude Code gateway, Cloudflare AI Gateway, etc.)
- * can route Reading Memory's analysis traffic without forking pi-ai.
- *
- * Workaround: pi-ai pins baseUrl per model in its registry and does not consult
- * env. This wrapper applies the override after resolution so the override
- * survives across pi-ai upgrades.
+ * Wraps Flue's model resolver with per-provider baseUrl overrides driven by env vars.
  */
 export function wrapResolveModelWithBaseUrlOverrides(
   base: NonNullable<FlueContextConfig['agentConfig']['resolveModel']>
@@ -99,20 +82,16 @@ export function createFlueReadingAnalyzer(
   db: Database,
   options: {
     model: string;
-    workspaceRoot?: string;
     resolveModel?: FlueContextConfig['agentConfig']['resolveModel'];
     tracePath?: string | null;
   }
 ): ReadingAnalyzer {
-  const workspaceRoot = options.workspaceRoot ?? WORKSPACE_ROOT;
-  const store = new SqliteSessionStore(db);
   const traces = new FlueTraceLogger(options.tracePath);
-  // Default resolver wraps pi-ai's resolver with env-driven baseUrl overrides.
-  // Caller-provided resolveModel (used by tests and special cases) bypasses
-  // the wrapper and is honored as-is.
   const defaultResolver = wrapResolveModelWithBaseUrlOverrides(resolveModel);
+  const modelResolver = options.resolveModel ?? defaultResolver;
+  const agent = createReadingAgent(options.model);
 
-  return async ({ itemId, title, text, sessionId }) => {
+  return async ({ itemId, title, text, sessionId, signal }) => {
     const requestedSessionId = sessionId ?? `analysis:${itemId}`;
     const trace = traces.createTrace({
       itemId,
@@ -122,31 +101,33 @@ export function createFlueReadingAnalyzer(
       model: options.model
     });
     const context = createFlueContext({
-      id: 'reading',
-      payload: {
-        item_id: itemId,
-        title,
-        text,
-        model: options.model,
-        session_id: requestedSessionId
-      },
+      id: requestedSessionId,
+      agentName: 'reading',
       env: process.env,
-      agentConfig: {
-        systemPrompt: '',
-        skills: {},
-        roles: {},
-        model: undefined,
-        resolveModel: options.resolveModel ?? defaultResolver,
-        compaction: { enabled: true }
-      },
-      createDefaultEnv: async () => createSandboxSessionEnv(new SkillOnlySandbox(workspaceRoot), VIRTUAL_ROOT),
-      createLocalEnv: async () => createSandboxSessionEnv(new SkillOnlySandbox(workspaceRoot), VIRTUAL_ROOT),
-      defaultStore: store
-    } satisfies FlueContextConfig);
+      agentConfig: { resolveModel: modelResolver },
+      createDefaultEnv: async () => createSandboxSessionEnv(new AnalysisSandbox(), VIRTUAL_ROOT)
+    });
     context.setEventCallback(trace.onEvent);
 
     try {
-      const result = v.parse(FlueAnalysisSchema, await readingAgent(context));
+      const harness = await context.initializeRootHarness(agent);
+      let result: FlueAnalysis;
+      try {
+        const session = await harness.session();
+        const response = await session.skill(analyzeItemSkill, {
+          args: {
+            item_id: itemId,
+            title,
+            text
+          },
+          result: FlueAnalysisSchema,
+          ...(signal ? { signal } : {})
+        });
+        result = response.data;
+      } finally {
+        await harness.close();
+        await context.flushEventCallbacks();
+      }
       const analysis = normalizeAnalysis(db, itemId, result, options.model);
       await trace.success(analysis);
       return analysis;
@@ -155,6 +136,48 @@ export function createFlueReadingAnalyzer(
       throw new ApiError('ANALYSIS_FAILED', 'Flue reading analysis failed', 502, true, 30);
     }
   };
+}
+
+class AnalysisSandbox implements SandboxApi {
+  async readFile(): Promise<string> {
+    throw new Error('Reading Memory analysis sandbox does not expose files.');
+  }
+
+  async readFileBuffer(): Promise<Uint8Array> {
+    throw new Error('Reading Memory analysis sandbox does not expose files.');
+  }
+
+  async writeFile(): Promise<void> {
+    throw new Error('Reading Memory analysis sandbox is read-only.');
+  }
+
+  async stat(): Promise<never> {
+    throw new Error('Reading Memory analysis sandbox does not expose files.');
+  }
+
+  async readdir(): Promise<string[]> {
+    return [];
+  }
+
+  async exists(): Promise<boolean> {
+    return false;
+  }
+
+  async mkdir(): Promise<void> {
+    throw new Error('Reading Memory analysis sandbox is read-only.');
+  }
+
+  async rm(): Promise<void> {
+    throw new Error('Reading Memory analysis sandbox is read-only.');
+  }
+
+  async exec() {
+    return {
+      stdout: '',
+      stderr: 'Reading Memory analysis sandbox does not allow command execution.',
+      exitCode: 126
+    };
+  }
 }
 
 function normalizeAnalysis(db: Database, itemId: string, result: FlueAnalysis, model: string): Analysis {
@@ -204,100 +227,4 @@ function uniqueStrings(values: string[]) {
 
 function itemExists(db: Database, itemId: string) {
   return Boolean(db.prepare("SELECT 1 AS ok FROM items WHERE id = ? AND status = 'indexed'").get(itemId));
-}
-
-const ALLOWED_DIRS = new Set([
-  '/',
-  '/.agents',
-  '/.agents/skills',
-  '/.agents/skills/analyze-item'
-]);
-const ALLOWED_FILES = new Set([
-  '/.agents/skills/analyze-item/SKILL.md'
-]);
-
-class SkillOnlySandbox implements SandboxApi {
-  constructor(private readonly workspaceRoot: string) {}
-
-  async readFile(path: string): Promise<string> {
-    const virtual = this.virtualPath(path);
-    if (!ALLOWED_FILES.has(virtual)) throw new Error('Reading API Flue sandbox only exposes the analyze-item skill.');
-    return await fs.readFile(this.realPath(virtual), 'utf8');
-  }
-
-  async readFileBuffer(path: string): Promise<Uint8Array> {
-    const virtual = this.virtualPath(path);
-    if (!ALLOWED_FILES.has(virtual)) throw new Error('Reading API Flue sandbox only exposes the analyze-item skill.');
-    return await fs.readFile(this.realPath(virtual));
-  }
-
-  async writeFile(): Promise<void> {
-    throw new Error('Reading API Flue sandbox is skill-only.');
-  }
-
-  async stat(path: string) {
-    const virtual = this.virtualPath(path);
-    this.assertAllowed(virtual);
-    const stat = await fs.lstat(this.realPath(virtual));
-    return {
-      isFile: stat.isFile(),
-      isDirectory: stat.isDirectory(),
-      isSymbolicLink: stat.isSymbolicLink(),
-      size: stat.size,
-      mtime: stat.mtime
-    };
-  }
-
-  async readdir(path: string): Promise<string[]> {
-    const virtual = this.virtualPath(path);
-    if (!ALLOWED_DIRS.has(virtual)) throw new Error('Reading API Flue sandbox only exposes the analyze-item skill.');
-    if (virtual === '/') return ['.agents'];
-    if (virtual === '/.agents') return ['skills'];
-    if (virtual === '/.agents/skills') return ['analyze-item'];
-    if (virtual === '/.agents/skills/analyze-item') return ['SKILL.md'];
-    return [];
-  }
-
-  async exists(path: string): Promise<boolean> {
-    const virtual = this.virtualPath(path);
-    if (!ALLOWED_DIRS.has(virtual) && !ALLOWED_FILES.has(virtual)) return false;
-    try {
-      await fs.access(this.realPath(virtual));
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  async mkdir(): Promise<void> {
-    throw new Error('Reading API Flue sandbox is skill-only.');
-  }
-
-  async rm(): Promise<void> {
-    throw new Error('Reading API Flue sandbox is skill-only.');
-  }
-
-  async exec() {
-    return {
-      stdout: '',
-      stderr: 'Reading API Flue sandbox does not allow command execution.',
-      exitCode: 126
-    };
-  }
-
-  private virtualPath(path: string) {
-    const suffix = path.startsWith(VIRTUAL_ROOT) ? path.slice(VIRTUAL_ROOT.length) : path;
-    return posix.normalize(`/${suffix}`);
-  }
-
-  private realPath(virtualPath: string) {
-    this.assertAllowed(virtualPath);
-    return join(this.workspaceRoot, virtualPath.slice(1));
-  }
-
-  private assertAllowed(virtualPath: string) {
-    if (!ALLOWED_DIRS.has(virtualPath) && !ALLOWED_FILES.has(virtualPath)) {
-      throw new Error('Reading API Flue sandbox only exposes the analyze-item skill.');
-    }
-  }
 }

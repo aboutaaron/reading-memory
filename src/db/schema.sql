@@ -63,6 +63,8 @@ CREATE TABLE IF NOT EXISTS idempotency_keys (
   PRIMARY KEY (principal, request_id)
 );
 
+-- Retained for databases created by the pre-1.0 Flue integration. The current
+-- analyzer keeps framework conversation state ephemeral and does not use it.
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
   data TEXT NOT NULL,

@@ -63,7 +63,7 @@ export function createReadingApi(
           payloadHash: payloadHash(body),
           source,
           analyze: (itemId) => withTimeout(
-            () => analyzer({ itemId, title: source.title, text: source.extractedText, sessionId: `analysis:${itemId}:${body.request_id}` }),
+            (signal) => analyzer({ itemId, title: source.title, text: source.extractedText, sessionId: `analysis:${itemId}:${body.request_id}`, signal }),
             remainingMs(deadline)
           )
         });

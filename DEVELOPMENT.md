@@ -248,4 +248,4 @@ The deployed default path is:
 ~/.reading-api/flue-events.jsonl
 ```
 
-For full transcripts, inspect the SQLite `sessions` table directly. That table contains the Flue skill prompt and assistant response for each persisted analysis session, including the source text sent to the model.
+Reading Memory does not persist full Flue transcripts. The runtime's per-analysis conversation is opaque and ephemeral; use the redacted JSONL trace for operational debugging. Existing `sessions` rows may remain in databases upgraded from the pre-1.0 Flue integration, but the current analyzer does not read or write them.

@@ -152,14 +152,14 @@ Reading Memory extracts, normalizes, dedupes, and stores the item
         ↓
 Flue analyzes the item with a structured skill
         ↓
-SQLite stores the corpus facts and Flue session state
+SQLite stores the canonical corpus facts and structured analysis
         ↓
 Later, agents query the corpus for recall, brief prep, or synthesis
 ```
 
 The TypeScript service owns the reliability work: HTTP contracts, auth, URL/PDF extraction, SSRF protections, content hashes, idempotency, SQLite persistence, query, backups, and `systemd` (Linux) / `launchd` (macOS) deployment.
 
-Flue owns the judgment boundary: invoking the reading skill, producing structured output, and persisting session state.
+Flue owns the judgment boundary: invoking the packaged reading skill and producing structured output. Its per-analysis conversation is opaque and ephemeral; Reading Memory persists only the validated result and redacted trace metadata.
 
 ## Architecture
 

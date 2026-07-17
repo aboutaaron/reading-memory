@@ -75,7 +75,7 @@ test('Flue 1.0 terminal events hash errors without persisting their messages', a
   assert.deepEqual(eventLines.map((line) => line.error_kind), ['Error', 'RUN_FAILED', 'string', 'SubmissionError']);
 });
 
-test('errorKind truncates content-bearing error identifiers before tracing them', async () => {
+test('errorKind hashes content-bearing error identifiers before tracing them', async () => {
   const leakyCode = `LEAKY_${'PRIVATE PAYLOAD TEXT '.repeat(10)}`;
   const events: FlueEvent[] = [
     { ...envelope, type: 'run_end', runId: 'run-1', durationMs: 5, isError: true, error: { code: leakyCode, message: 'boom' } }
@@ -85,9 +85,8 @@ test('errorKind truncates content-bearing error identifiers before tracing them'
   const eventLine = lines.find((line) => line.event === 'flue_event');
 
   assert(eventLine);
-  assert.equal(eventLine.error_kind, leakyCode.slice(0, 64));
-  assert.equal(eventLine.error_kind.length, 64);
-  assert(!JSON.stringify(lines).includes(leakyCode));
+  assert.match(eventLine.error_kind, /^sha256:/);
+  assert(!JSON.stringify(lines).includes('PRIVATE PAYLOAD TEXT'));
 });
 
 async function writeEvents(events: FlueEvent[]) {

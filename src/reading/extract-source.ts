@@ -15,6 +15,9 @@ export async function extractSource(request: IngestRequest, signal?: AbortSignal
     if (request.source.text.length > LIMITS.maxTextChars) {
       throw new ApiError('PAYLOAD_TOO_LARGE', 'Text source exceeds character limit', 413);
     }
+    if ((request.source.title?.length ?? 0) > LIMITS.maxTextChars) {
+      throw new ApiError('PAYLOAD_TOO_LARGE', 'Text title exceeds character limit', 413);
+    }
     const normalized = normalizeContent(request.source.text);
     const canonicalUrl = extractCanonicalUrlFromText(request.source.text);
     return {

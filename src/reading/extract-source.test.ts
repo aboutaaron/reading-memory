@@ -45,3 +45,21 @@ test('ignores invalid canonical URL hints in text captures', async () => {
 
   assert.equal(source.canonicalUrl, null);
 });
+
+test('rejects text titles that exceed the ephemeral file character limit', async () => {
+  await assert.rejects(
+    extractSource({
+      request_id: '00000000-0000-4000-8000-000000000013',
+      source_type: 'text',
+      source: {
+        type: 'text',
+        text: 'Article body.',
+        title: 'T'.repeat(100_001)
+      }
+    }),
+    (error: unknown) => {
+      assert.equal((error as { code?: string }).code, 'PAYLOAD_TOO_LARGE');
+      return true;
+    }
+  );
+});

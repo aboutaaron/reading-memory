@@ -218,20 +218,21 @@ function summarizeError(error: unknown) {
   };
 }
 
-/** Max chars for an error identifier written verbatim into the trace. Legitimate
- * error codes/class names fit well within this; anything longer risks leaking
- * payload-bearing strings into the otherwise-redacted trace. */
-const ERROR_KIND_MAX_CHARS = 64;
+/** Only conventional error identifiers are safe to persist verbatim. Hash any
+ * other value so a provider cannot smuggle payload text through code/name/type. */
+const SAFE_ERROR_KIND = /^[A-Za-z][A-Za-z0-9_.:-]{0,63}$/;
 
 function errorKind(error: unknown) {
   if (typeof error === 'object' && error !== null) {
     const candidate = error as Record<string, unknown>;
     for (const key of ['code', 'name', 'type'] as const) {
       const value = candidate[key];
-      if (typeof value === 'string' && value.length > 0) return value.slice(0, ERROR_KIND_MAX_CHARS);
+      if (typeof value === 'string' && value.length > 0) {
+        return SAFE_ERROR_KIND.test(value) ? value : sha256(value);
+      }
     }
   }
-  if (error instanceof Error) return error.name.slice(0, ERROR_KIND_MAX_CHARS);
+  if (error instanceof Error) return SAFE_ERROR_KIND.test(error.name) ? error.name : sha256(error.name);
   return typeof error;
 }
 

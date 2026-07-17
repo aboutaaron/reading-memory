@@ -59,16 +59,16 @@ test('wrapResolveModelWithBaseUrlOverrides translates hyphenated provider names 
   }
 });
 
-test('production resolver resolves the OpenAI default through the standard Responses API', () => {
+test('production resolver resolves the OpenAI Luna default through the standard Responses API', () => {
   const wrapped = wrapResolveModelWithBaseUrlOverrides(resolveModel);
-  const result = wrapped('openai/gpt-5.5') as {
+  const result = wrapped('openai/gpt-5.6-luna') as {
     id: string;
     provider: string;
     api: string;
     baseUrl: string;
   };
 
-  assert.equal(result.id, 'gpt-5.5');
+  assert.equal(result.id, 'gpt-5.6-luna');
   assert.equal(result.provider, 'openai');
   assert.equal(result.api, 'openai-responses');
   assert.equal(result.baseUrl, 'https://api.openai.com/v1');

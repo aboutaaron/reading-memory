@@ -104,7 +104,7 @@ READING_API_TOKEN=dev-secret READING_API_DB=/tmp/reading.sqlite npm run dev
 - `READING_API_DATA_DIR`: defaults to `~/.reading-api`.
 - `READING_API_DB`: defaults to `~/.reading-api/reading.sqlite`.
 - `READING_API_BACKUP_DIR`: defaults to `~/backups/reading-memory`.
-- `READING_API_FLUE_MODEL`: provider/model selected through Flue; defaults to `openai/gpt-5.5`.
+- `READING_API_FLUE_MODEL`: provider/model selected through Flue; defaults to `openai/gpt-5.6-luna`.
 - `READING_API_FLUE_TRACE_PATH`: defaults to `<READING_API_DATA_DIR>/flue-events.jsonl`; set to `off` to disable local Flue event tracing.
 
 Production secret file:

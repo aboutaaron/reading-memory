@@ -46,7 +46,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     authToken: env.READING_API_TOKEN ?? '',
     dataDir,
     backupDir: env.READING_API_BACKUP_DIR ?? join(homedir(), 'backups', 'reading-memory'),
-    flueModel: env.READING_API_FLUE_MODEL ?? 'openai/gpt-5.5',
+    flueModel: env.READING_API_FLUE_MODEL ?? 'openai/gpt-5.6-luna',
     flueTracePath: env.READING_API_FLUE_TRACE_PATH === 'off'
       ? null
       : env.READING_API_FLUE_TRACE_PATH ?? join(dataDir, 'flue-events.jsonl')

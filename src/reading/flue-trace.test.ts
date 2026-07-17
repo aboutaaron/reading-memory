@@ -78,15 +78,17 @@ test('Flue 1.0 terminal events hash errors without persisting their messages', a
 test('errorKind hashes content-bearing error identifiers before tracing them', async () => {
   const leakyCode = `LEAKY_${'PRIVATE PAYLOAD TEXT '.repeat(10)}`;
   const events: FlueEvent[] = [
-    { ...envelope, type: 'run_end', runId: 'run-1', durationMs: 5, isError: true, error: { code: leakyCode, message: 'boom' } }
+    { ...envelope, type: 'run_end', runId: 'run-1', durationMs: 5, isError: true, error: { code: leakyCode, message: 'boom' } },
+    { ...envelope, type: 'run_end', runId: 'run-2', durationMs: 5, isError: true, error: { type: 'PRIVATE_SOURCE_TEXT', message: 'boom' } }
   ];
 
   const lines = await writeEvents(events);
-  const eventLine = lines.find((line) => line.event === 'flue_event');
+  const eventLines = lines.filter((line) => line.event === 'flue_event');
 
-  assert(eventLine);
-  assert.match(eventLine.error_kind, /^sha256:/);
+  assert.equal(eventLines.length, 2);
+  for (const eventLine of eventLines) assert.match(eventLine.error_kind, /^sha256:/);
   assert(!JSON.stringify(lines).includes('PRIVATE PAYLOAD TEXT'));
+  assert(!JSON.stringify(lines).includes('PRIVATE_SOURCE_TEXT'));
 });
 
 async function writeEvents(events: FlueEvent[]) {

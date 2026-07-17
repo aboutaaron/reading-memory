@@ -38,42 +38,14 @@ Re-running `setup` is safe. The command preserves the existing bearer token and 
 Flue analysis calls the underlying LLM provider directly. If you need that traffic to flow through a corporate proxy, Cloudflare AI Gateway, or a self-hosted gateway (rather than the public provider URL), set a per-provider `<PROVIDER>_BASE_URL` env var alongside `READING_API_FLUE_MODEL`. The override is applied after the model is resolved.
 
 ```bash
-# Route anthropic/* models through your proxy (matches the Anthropic SDK convention).
-ANTHROPIC_BASE_URL=https://your-anthropic-proxy.example.com
-
-# Route openai/* models the same way.
+# Route openai/* models through your proxy (matches the OpenAI SDK convention).
 OPENAI_BASE_URL=https://your-openai-proxy.example.com
+
+# Other Flue providers follow the same pattern.
+ANTHROPIC_BASE_URL=https://your-anthropic-proxy.example.com
 ```
 
 The env var name is derived from the resolved provider: hyphens become underscores, uppercased, suffixed with `_BASE_URL`. So `cloudflare-ai-gateway/...` reads from `CLOUDFLARE_AI_GATEWAY_BASE_URL`. See `.env.example` for more.
-
-### Routing Analysis Through Local OpenClaw
-
-Reading Memory can use a model available through OpenClaw's local OpenResponses endpoint, including models authenticated by OpenClaw rather than a provider API key. Enable the gateway's Responses endpoint, then configure:
-
-```json
-{
-  "agents": {
-    "list": [{
-      "id": "reading-memory",
-      "workspace": "/path/to/an/isolated/reading-memory-workspace",
-      "model": { "primary": "openai/gpt-5.6-luna", "fallbacks": [] },
-      "tools": { "deny": ["*"] }
-    }]
-  }
-}
-```
-
-```bash
-READING_API_FLUE_MODEL=openclaw-gateway/openclaw
-OPENCLAW_GATEWAY_BASE_URL=http://127.0.0.1:18789/v1
-OPENCLAW_GATEWAY_TOKEN=<local-gateway-token>
-READING_API_OPENCLAW_MODEL=openai/gpt-5.6-luna
-```
-
-The gateway URL must resolve to a loopback host so the operator token cannot be forwarded off-host. Reading analysis is hard-pinned to the `reading-memory` OpenClaw agent; provision that agent with all internal tools denied as shown above. The selected backend is sent with OpenClaw's `x-openclaw-model` header, while Flue continues to own the structured reading-analysis contract.
-
-OpenClaw currently persists local agent session transcripts even when the Responses payload sets `store: false`. The bridge therefore sends extracted source text as an `input_file`, which OpenClaw injects ephemerally instead of writing into session history; the persisted transcript still contains the model's derived analysis. Keep the dedicated agent's session directory private and include it in the host's retention and cleanup policy. Stored Reading Memory analysis records the stable `openclaw-gateway/openclaw` route alias; the physical backend remains an OpenClaw deployment concern.
 
 ## Workflow
 

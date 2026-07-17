@@ -218,9 +218,27 @@ function summarizeError(error: unknown) {
   };
 }
 
-/** Only conventional error identifiers are safe to persist verbatim. Hash any
- * other value so a provider cannot smuggle payload text through code/name/type. */
-const SAFE_ERROR_KIND = /^[A-Za-z][A-Za-z0-9_.:-]{0,63}$/;
+/** Only fixed, known operational identifiers are safe to persist verbatim.
+ * Provider-controlled code/name/type values are otherwise hashed. */
+const SAFE_ERROR_KINDS = new Set([
+  'AbortError',
+  'AggregateError',
+  'EACCES',
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'EEXIST',
+  'ENOENT',
+  'EPERM',
+  'ETIMEDOUT',
+  'Error',
+  'RangeError',
+  'ReferenceError',
+  'RUN_FAILED',
+  'SubmissionError',
+  'SyntaxError',
+  'TypeError',
+  'URIError'
+]);
 
 function errorKind(error: unknown) {
   if (typeof error === 'object' && error !== null) {
@@ -228,11 +246,11 @@ function errorKind(error: unknown) {
     for (const key of ['code', 'name', 'type'] as const) {
       const value = candidate[key];
       if (typeof value === 'string' && value.length > 0) {
-        return SAFE_ERROR_KIND.test(value) ? value : sha256(value);
+        return SAFE_ERROR_KINDS.has(value) ? value : sha256(value);
       }
     }
   }
-  if (error instanceof Error) return SAFE_ERROR_KIND.test(error.name) ? error.name : sha256(error.name);
+  if (error instanceof Error) return SAFE_ERROR_KINDS.has(error.name) ? error.name : sha256(error.name);
   return typeof error;
 }
 

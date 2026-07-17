@@ -11,6 +11,16 @@ test('derives dataDir from explicit READING_API_DB when data dir is unset', () =
   assert.equal(config.dbPath, '/tmp/reading-api-smoke.sqlite');
   assert.equal(config.dataDir, '/tmp');
   assert.equal(config.flueTracePath, '/tmp/flue-events.jsonl');
+  assert.equal(config.flueModel, 'openai/gpt-5.5');
+});
+
+test('keeps model selection provider-configurable', () => {
+  const config = loadConfig({
+    READING_API_TOKEN: 'secret',
+    READING_API_FLUE_MODEL: 'test-provider/test-model'
+  } as NodeJS.ProcessEnv);
+
+  assert.equal(config.flueModel, 'test-provider/test-model');
 });
 
 test('rejects non-loopback bind hosts', () => {

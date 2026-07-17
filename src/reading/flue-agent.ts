@@ -1,5 +1,5 @@
 import * as v from 'valibot';
-import { createSandboxSessionEnv, registerProvider, type SandboxApi } from '@flue/runtime';
+import { createSandboxSessionEnv, type SandboxApi } from '@flue/runtime';
 import {
   createFlueContext,
   resolveModel,
@@ -7,21 +7,12 @@ import {
 } from '@flue/runtime/internal';
 import type { Database } from '../db/connection.js';
 import { ApiError } from '../api/errors.js';
-import { isLoopbackHost } from '../config.js';
 import type { Analysis } from './types.js';
 import { canonicalRelationship, findRelationships } from './analyzer.js';
 import { FlueTraceLogger } from './flue-trace.js';
 import { analyzeItemSkill, createReadingAgent } from './flue-reading-agent.js';
-import {
-  OPENCLAW_MAX_OUTPUT_TOKENS,
-  OPENCLAW_RESPONSES_API,
-  registerOpenClawResponsesBridge
-} from './openclaw-responses.js';
 
 const VIRTUAL_ROOT = '/workspace';
-const OPENCLAW_GATEWAY_PROVIDER = 'openclaw-gateway';
-const OPENCLAW_AGENT_ID = 'reading-memory';
-const OPENCLAW_BACKEND_MODEL = 'openai/gpt-5.6-luna';
 
 const FlueAnalysisSchema = v.object({
   summary: v.string(),
@@ -80,57 +71,11 @@ export function wrapResolveModelWithBaseUrlOverrides(
     if (!resolved || typeof resolved !== 'object') return resolved;
     const provider = (resolved as { provider?: unknown }).provider;
     if (typeof provider !== 'string' || provider.length === 0) return resolved;
-    if (provider === OPENCLAW_GATEWAY_PROVIDER) return resolved;
     const envKey = `${provider.toUpperCase().replace(/-/g, '_')}_BASE_URL`;
     const override = process.env[envKey];
     if (!override) return resolved;
     return { ...resolved, baseUrl: override };
   };
-}
-
-/**
- * Registers OpenClaw's local OpenResponses endpoint as a Flue provider.
- * The gateway token is deliberately restricted to loopback destinations.
- */
-export function configureOpenClawGatewayProvider(
-  model: string,
-  env: NodeJS.ProcessEnv = process.env
-): void {
-  if (!model.startsWith(`${OPENCLAW_GATEWAY_PROVIDER}/`)) return;
-
-  const baseUrl = env.OPENCLAW_GATEWAY_BASE_URL?.trim();
-  if (!baseUrl) {
-    throw new Error('OPENCLAW_GATEWAY_BASE_URL is required for openclaw-gateway models.');
-  }
-  const token = env.OPENCLAW_GATEWAY_TOKEN?.trim();
-  if (!token) {
-    throw new Error('OPENCLAW_GATEWAY_TOKEN is required for openclaw-gateway models.');
-  }
-
-  let parsed: URL;
-  try {
-    parsed = new URL(baseUrl);
-  } catch {
-    throw new Error('OPENCLAW_GATEWAY_BASE_URL must be a valid loopback URL.');
-  }
-  if (!isLoopbackHost(parsed.hostname)) {
-    throw new Error('OPENCLAW_GATEWAY_BASE_URL must use a loopback host.');
-  }
-
-  const backendModel = env.READING_API_OPENCLAW_MODEL?.trim() || OPENCLAW_BACKEND_MODEL;
-
-  registerOpenClawResponsesBridge();
-  registerProvider(OPENCLAW_GATEWAY_PROVIDER, {
-    api: OPENCLAW_RESPONSES_API,
-    baseUrl,
-    apiKey: token,
-    headers: {
-      'x-openclaw-agent-id': OPENCLAW_AGENT_ID,
-      'x-openclaw-model': backendModel
-    },
-    contextWindow: 200_000,
-    maxTokens: OPENCLAW_MAX_OUTPUT_TOKENS
-  });
 }
 
 export function createFlueReadingAnalyzer(
@@ -141,7 +86,6 @@ export function createFlueReadingAnalyzer(
     tracePath?: string | null;
   }
 ): ReadingAnalyzer {
-  configureOpenClawGatewayProvider(options.model);
   const traces = new FlueTraceLogger(options.tracePath);
   const defaultResolver = wrapResolveModelWithBaseUrlOverrides(resolveModel);
   const modelResolver = options.resolveModel ?? defaultResolver;

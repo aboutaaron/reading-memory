@@ -104,7 +104,10 @@ READING_API_TOKEN=dev-secret READING_API_DB=/tmp/reading.sqlite npm run dev
 - `READING_API_DATA_DIR`: defaults to `~/.reading-api`.
 - `READING_API_DB`: defaults to `~/.reading-api/reading.sqlite`.
 - `READING_API_BACKUP_DIR`: defaults to `~/backups/reading-memory`.
-- `READING_API_FLUE_MODEL`: defaults to `openai/gpt-5.5`; production currently uses `anthropic/claude-sonnet-4-5`.
+- `READING_API_FLUE_MODEL`: defaults to `openai/gpt-5.5`; production currently uses `openclaw-gateway/openclaw`.
+- `OPENCLAW_GATEWAY_BASE_URL`: loopback OpenResponses base URL used by the `openclaw-gateway` Flue provider.
+- `OPENCLAW_GATEWAY_TOKEN`: local gateway bearer token used only with a loopback gateway URL.
+- `READING_API_OPENCLAW_MODEL`: backend model override sent to OpenClaw; production currently pins `openai/gpt-5.6-luna`.
 - `READING_API_FLUE_TRACE_PATH`: defaults to `<READING_API_DATA_DIR>/flue-events.jsonl`; set to `off` to disable local Flue event tracing.
 
 Production secret file:

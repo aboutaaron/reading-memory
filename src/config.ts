@@ -31,12 +31,17 @@ export type AppConfig = {
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
 
+export function isLoopbackHost(host: string): boolean {
+  const normalized = host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host;
+  return LOOPBACK_HOSTS.has(normalized);
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const defaultDataDir = join(homedir(), '.reading-api');
   const dbPath = env.READING_API_DB ?? join(env.READING_API_DATA_DIR ?? defaultDataDir, 'reading.sqlite');
   const dataDir = env.READING_API_DATA_DIR ?? dirname(dbPath);
   const host = env.READING_API_HOST ?? '127.0.0.1';
-  if (!LOOPBACK_HOSTS.has(host)) {
+  if (!isLoopbackHost(host)) {
     throw new Error(`READING_API_HOST must be loopback-only; got ${host}`);
   }
   return {

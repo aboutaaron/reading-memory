@@ -38,11 +38,11 @@ Re-running `setup` is safe. The command preserves the existing bearer token and 
 Flue analysis calls the underlying LLM provider directly. If you need that traffic to flow through a corporate proxy, Cloudflare AI Gateway, or a self-hosted gateway (rather than the public provider URL), set a per-provider `<PROVIDER>_BASE_URL` env var alongside `READING_API_FLUE_MODEL`. The override is applied after the model is resolved.
 
 ```bash
-# Route anthropic/* models through your proxy (matches the Anthropic SDK convention).
-ANTHROPIC_BASE_URL=https://your-anthropic-proxy.example.com
-
-# Route openai/* models the same way.
+# Route openai/* models through your proxy (matches the OpenAI SDK convention).
 OPENAI_BASE_URL=https://your-openai-proxy.example.com
+
+# Other Flue providers follow the same pattern.
+ANTHROPIC_BASE_URL=https://your-anthropic-proxy.example.com
 ```
 
 The env var name is derived from the resolved provider: hyphens become underscores, uppercased, suffixed with `_BASE_URL`. So `cloudflare-ai-gateway/...` reads from `CLOUDFLARE_AI_GATEWAY_BASE_URL`. See `.env.example` for more.
@@ -152,14 +152,14 @@ Reading Memory extracts, normalizes, dedupes, and stores the item
         ↓
 Flue analyzes the item with a structured skill
         ↓
-SQLite stores the corpus facts and Flue session state
+SQLite stores the canonical corpus facts and structured analysis
         ↓
 Later, agents query the corpus for recall, brief prep, or synthesis
 ```
 
 The TypeScript service owns the reliability work: HTTP contracts, auth, URL/PDF extraction, SSRF protections, content hashes, idempotency, SQLite persistence, query, backups, and `systemd` (Linux) / `launchd` (macOS) deployment.
 
-Flue owns the judgment boundary: invoking the reading skill, producing structured output, and persisting session state.
+Flue owns the judgment boundary: invoking the packaged reading skill and producing structured output. Its per-analysis conversation is opaque and ephemeral; Reading Memory persists only the validated result and redacted trace metadata.
 
 ## Architecture
 

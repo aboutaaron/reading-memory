@@ -104,7 +104,7 @@ READING_API_TOKEN=dev-secret READING_API_DB=/tmp/reading.sqlite npm run dev
 - `READING_API_DATA_DIR`: defaults to `~/.reading-api`.
 - `READING_API_DB`: defaults to `~/.reading-api/reading.sqlite`.
 - `READING_API_BACKUP_DIR`: defaults to `~/backups/reading-memory`.
-- `READING_API_FLUE_MODEL`: defaults to `openai/gpt-5.5`; production currently uses `anthropic/claude-sonnet-4-5`.
+- `READING_API_FLUE_MODEL`: provider/model selected through Flue; defaults to `openai/gpt-5.6-luna`.
 - `READING_API_FLUE_TRACE_PATH`: defaults to `<READING_API_DATA_DIR>/flue-events.jsonl`; set to `off` to disable local Flue event tracing.
 
 Production secret file:
@@ -248,4 +248,4 @@ The deployed default path is:
 ~/.reading-api/flue-events.jsonl
 ```
 
-For full transcripts, inspect the SQLite `sessions` table directly. That table contains the Flue skill prompt and assistant response for each persisted analysis session, including the source text sent to the model.
+Reading Memory does not persist full Flue transcripts. The runtime's per-analysis conversation is opaque and ephemeral; use the redacted JSONL trace for operational debugging. Existing `sessions` rows may remain in databases upgraded from the pre-1.0 Flue integration, but the current analyzer does not read or write them.

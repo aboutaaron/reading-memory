@@ -1,26 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { fauxAssistantMessage, registerFauxProvider } from '@mariozechner/pi-ai';
+import { fauxAssistantMessage, fauxToolCall, registerFauxProvider } from '@earendil-works/pi-ai/compat';
+import { resolveModel } from '@flue/runtime/internal';
 import { openMemoryDatabase } from '../db/connection.js';
 import { createFlueReadingAnalyzer, flueAnalyzerHealth, wrapResolveModelWithBaseUrlOverrides } from './flue-agent.js';
 
-test('flueAnalyzerHealth reports whether the analyze-item skill is readable', async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), 'reading-api-analyzer-health-'));
-
-  try {
-    assert.deepEqual(flueAnalyzerHealth(workspaceRoot), { status: 'unavailable', warn: true });
-
-    const skillDir = join(workspaceRoot, '.agents', 'skills', 'analyze-item');
-    await mkdir(skillDir, { recursive: true });
-    await writeFile(join(skillDir, 'SKILL.md'), '# Analyze item\n');
-
-    assert.deepEqual(flueAnalyzerHealth(workspaceRoot), { status: 'ok', warn: false });
-  } finally {
-    await rm(workspaceRoot, { recursive: true, force: true });
-  }
+test('flueAnalyzerHealth reports the packaged analyze-item skill as ready', () => {
+  assert.deepEqual(flueAnalyzerHealth(), { status: 'ok', warn: false });
 });
 
 test('wrapResolveModelWithBaseUrlOverrides passes through when no env override is set', () => {
@@ -70,10 +59,38 @@ test('wrapResolveModelWithBaseUrlOverrides translates hyphenated provider names 
   }
 });
 
-test('Flue analyzer loads the analyze-item skill and persists session state in SQLite', async () => {
+test('production resolver resolves the OpenAI Luna default through the standard Responses API', () => {
+  const wrapped = wrapResolveModelWithBaseUrlOverrides(resolveModel);
+  const result = wrapped('openai/gpt-5.6-luna') as {
+    id: string;
+    provider: string;
+    api: string;
+    baseUrl: string;
+  };
+
+  assert.equal(result.id, 'gpt-5.6-luna');
+  assert.equal(result.provider, 'openai');
+  assert.equal(result.api, 'openai-responses');
+  assert.equal(result.baseUrl, 'https://api.openai.com/v1');
+});
+
+test('production resolver remains provider-agnostic for another registered provider', () => {
+  const wrapped = wrapResolveModelWithBaseUrlOverrides(resolveModel);
+  const result = wrapped('anthropic/claude-sonnet-4-5') as {
+    id: string;
+    provider: string;
+    api: string;
+  };
+
+  assert.equal(result.id, 'claude-sonnet-4-5');
+  assert.equal(result.provider, 'anthropic');
+  assert.equal(result.api, 'anthropic-messages');
+});
+
+test('Flue analyzer loads the packaged analyze-item skill without persisting opaque session state', async () => {
   const db = openMemoryDatabase();
   const faux = registerFauxProvider();
-  const flueResult = JSON.stringify({
+  const flueResult = {
     summary: 'Durable reading memory lets local agents recall important material.',
     claims: ['Local agents need durable reading memory.'],
     relevance: { score: 0.86, themes: ['agent-memory'] },
@@ -88,9 +105,9 @@ test('Flue analyzer loads the analyze-item skill and persists session state in S
         explanation: 'Fake relationship from model output',
         confidence: 0.8
       }]
-  });
+  };
   faux.setResponses([
-    fauxAssistantMessage(`---RESULT_START---\n${flueResult}\n---RESULT_END---`)
+    fauxAssistantMessage(fauxToolCall('finish', flueResult), { stopReason: 'toolUse' })
   ]);
 
   try {
@@ -112,9 +129,7 @@ test('Flue analyzer loads the analyze-item skill and persists session state in S
     assert.equal(faux.state.callCount, 1);
 
     const sessions = db.prepare('SELECT id, data FROM sessions').all() as Array<{ id: string; data: string }>;
-    assert.equal(sessions.length, 1);
-    assert.match(sessions[0]?.id ?? '', /agent-session/);
-    assert.match(sessions[0]?.data ?? '', /Durable reading memory/);
+    assert.equal(sessions.length, 0);
   } finally {
     faux.unregister();
   }
@@ -125,7 +140,7 @@ test('Flue analyzer writes redacted local traces', async () => {
   const tmp = await mkdtemp(join(tmpdir(), 'reading-api-traces-'));
   const tracePath = join(tmp, 'flue-events.jsonl');
   const faux = registerFauxProvider();
-  const flueResult = JSON.stringify({
+  const flueResult = {
     summary: 'Trace logging records useful output without raw source text.',
     claims: ['Trace logs are useful.'],
     relevance: { score: 0.75, themes: ['observability'] },
@@ -134,9 +149,9 @@ test('Flue analyzer writes redacted local traces', async () => {
     reason: 'Useful for inspecting Flue behavior.',
     tags: [{ tag: 'observability', reason: 'Core topic', confidence: 0.88 }],
     relationships: []
-  });
+  };
   faux.setResponses([
-    fauxAssistantMessage(`---RESULT_START---\n${flueResult}\n---RESULT_END---`)
+    fauxAssistantMessage(fauxToolCall('finish', flueResult), { stopReason: 'toolUse' })
   ]);
 
   try {
@@ -174,7 +189,7 @@ test('Flue trace write failures do not fail analysis', async () => {
   const blocker = join(tmp, 'not-a-directory');
   await writeFile(blocker, 'blocker');
   const faux = registerFauxProvider();
-  const flueResult = JSON.stringify({
+  const flueResult = {
     summary: 'Analysis succeeds even when trace writing fails.',
     claims: ['Tracing must be best-effort.'],
     relevance: { score: 0.7, themes: ['reliability'] },
@@ -183,9 +198,9 @@ test('Flue trace write failures do not fail analysis', async () => {
     reason: 'Observability should not break ingest.',
     tags: [{ tag: 'reliability', reason: 'Core topic', confidence: 0.9 }],
     relationships: []
-  });
+  };
   faux.setResponses([
-    fauxAssistantMessage(`---RESULT_START---\n${flueResult}\n---RESULT_END---`)
+    fauxAssistantMessage(fauxToolCall('finish', flueResult), { stopReason: 'toolUse' })
   ]);
 
   try {
@@ -214,7 +229,7 @@ test('Flue trace analysis errors do not persist raw model output', async () => {
   const tracePath = join(tmp, 'flue-events.jsonl');
   const faux = registerFauxProvider();
   faux.setResponses([
-    fauxAssistantMessage('---RESULT_START---\n"PRIVATE MODEL ECHO SHOULD NOT BE LOGGED"\n---RESULT_END---')
+    fauxAssistantMessage(fauxToolCall('finish', { summary: 'PRIVATE MODEL ECHO SHOULD NOT BE LOGGED' }), { stopReason: 'toolUse' })
   ]);
 
   try {
@@ -241,5 +256,82 @@ test('Flue trace analysis errors do not persist raw model output', async () => {
   } finally {
     faux.unregister();
     await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('Flue analyzer rejects promptly when the abort signal is already aborted', async () => {
+  const db = openMemoryDatabase();
+  const faux = registerFauxProvider();
+  faux.setResponses([
+    fauxAssistantMessage(fauxToolCall('finish', { summary: 'should never be reached' }), { stopReason: 'toolUse' })
+  ]);
+
+  try {
+    const analyze = createFlueReadingAnalyzer(db, {
+      model: 'faux/faux-1',
+      resolveModel: () => faux.getModel()
+    });
+    const controller = new AbortController();
+    controller.abort();
+
+    await assert.rejects(
+      () => analyze({
+        itemId: 'item_aborted',
+        title: 'Aborted before start',
+        text: 'This analysis should be cancelled before the model is called.',
+        signal: controller.signal
+      }),
+      /Flue reading analysis failed/
+    );
+    assert.equal(faux.state.callCount, 0);
+  } finally {
+    faux.unregister();
+  }
+});
+
+test('Flue analyzer propagates an abort after the provider request starts', async () => {
+  const db = openMemoryDatabase();
+  const faux = registerFauxProvider();
+  let providerStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    providerStarted = resolve;
+  });
+  faux.setResponses([
+    async (_context, options) => {
+      providerStarted();
+      await new Promise<never>((_resolve, reject) => {
+        const signal = options?.signal;
+        if (!signal) {
+          reject(new Error('Expected an AbortSignal at the provider boundary.'));
+          return;
+        }
+        const abort = () => reject(signal.reason ?? new Error('Request was aborted'));
+        if (signal.aborted) abort();
+        else signal.addEventListener('abort', abort, { once: true });
+      });
+      throw new Error('Provider request unexpectedly continued after abort.');
+    }
+  ]);
+
+  try {
+    const analyze = createFlueReadingAnalyzer(db, {
+      model: 'faux/faux-1',
+      resolveModel: () => faux.getModel()
+    });
+    const controller = new AbortController();
+    const analysis = analyze({
+      itemId: 'item_aborted_in_flight',
+      title: 'Abort in flight',
+      text: 'This analysis should be cancelled after the provider call begins.',
+      signal: controller.signal
+    });
+
+    await started;
+    controller.abort(new Error('request deadline exceeded'));
+
+    await assert.rejects(analysis, /Flue reading analysis failed/);
+    assert.equal(faux.state.callCount, 1);
+  } finally {
+    faux.unregister();
   }
 });

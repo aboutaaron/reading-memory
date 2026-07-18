@@ -17,7 +17,7 @@ Reading Memory extracts, normalizes, dedupes, and stores the item
         |
 Flue analyzes the item with a structured skill
         |
-SQLite stores corpus facts and Flue session state
+SQLite stores canonical corpus facts and structured analysis
         |
 Later, agents query the corpus for recall, brief prep, or synthesis
 ```
@@ -42,12 +42,11 @@ The TypeScript service owns the reliability boundary:
 Flue owns the model-judgment boundary:
 
 - invoking the reading-analysis agent
-- applying the `analyze-item` skill
+- applying the packaged `analyze-item` skill
 - producing structured reading output
-- persisting analysis session state
 - emitting redacted trace events for local debugging
 
-SQLite is the durable store for both corpus records and Flue session state. The service stores operational data outside the git checkout, under `~/.reading-api` by default.
+SQLite is the durable store for canonical corpus records and validated structured analysis. Flue's per-analysis conversation is opaque and ephemeral. The service stores operational data outside the git checkout, under `~/.reading-api` by default.
 
 ## Security Model
 
@@ -69,13 +68,15 @@ Keep the service loopback-only unless you redesign authentication, transport sec
 
 Reading Memory uses [Flue](https://github.com/withastro/flue) as the framework for the model-judgment step.
 
-The Flue agent lives in `.flue/agents/reading.ts`. It calls the `analyze-item` skill and returns structured JSON that the TypeScript service validates and stores.
+The Flue agent lives in `src/reading/flue-reading-agent.ts`. It packages `analyze-item` with the agent definition, so required application behavior does not depend on workspace skill discovery. The runtime returns structured data that the TypeScript service validates and stores.
+
+The build still copies `.agents/` into `dist/` as a static artifact. The current runtime does not discover or execute that copy; `src/reading/flue-reading-agent.ts` is canonical.
 
 The split is deliberate:
 
 - TypeScript handles service guarantees: contracts, auth, extraction, dedupe, persistence, validation, backups, and deployment.
 - Flue handles reading judgment: summary, claims, relevance, tags, recommended action, and relationships.
 
-Flue sessions are stored in SQLite. Reading Memory also writes redacted Flue activity to local JSONL traces for debugging. Those traces are operational metadata by default, not raw article text or bearer tokens.
+Flue conversations are not persisted. Reading Memory writes redacted Flue activity to local JSONL traces for debugging; those traces are operational metadata by default, not raw article text or bearer tokens. A legacy `sessions` table remains in upgraded databases for backward compatibility, but the current analyzer does not read or write it.
 
 For commands to inspect traces, see [DEVELOPMENT.md](DEVELOPMENT.md#inspect-flue-activity).

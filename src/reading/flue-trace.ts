@@ -1,7 +1,8 @@
 import { appendFile, mkdir } from 'node:fs/promises';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
-import type { FlueEvent } from '@flue/sdk/client';
+import type { FlueEvent } from '@flue/runtime';
+import { sha256 } from '../ingest/content-hash.js';
 import type { Analysis } from './types.js';
 
 type TraceBase = {
@@ -32,10 +33,6 @@ export type FlueTraceEvent =
       args_keys?: string[];
       is_error?: boolean;
       result_summary?: string;
-      command_chars?: number;
-      command_sha256?: string;
-      command_args_count?: number;
-      exit_code?: number;
       error_kind?: string;
       error_message_chars?: number;
       error_message_sha256?: string;
@@ -125,7 +122,8 @@ export class FlueTraceLogger {
           duration_ms: Date.now() - startedAt,
           ...summarizeError(error)
         });
-      }
+      },
+      flush: () => this.pending
     };
   }
 
@@ -159,8 +157,8 @@ function summarizeFlueEvent(event: FlueEvent): FlueEventTraceSummary {
     event: 'flue_event' as const,
     flue_type: event.type
   };
-  addDefined(base, 'session_id', event.sessionId);
-  addDefined(base, 'parent_session_id', event.parentSessionId);
+  addDefined(base, 'session_id', event.session);
+  addDefined(base, 'parent_session_id', event.parentSession);
   addDefined(base, 'task_id', event.taskId);
 
   switch (event.type) {
@@ -173,7 +171,7 @@ function summarizeFlueEvent(event: FlueEvent): FlueEventTraceSummary {
         tool_call_id: event.toolCallId,
         args_keys: event.args && typeof event.args === 'object' ? Object.keys(event.args).sort() : []
       };
-    case 'tool_end':
+    case 'tool':
       return {
         ...base,
         tool_name: event.toolName,
@@ -181,26 +179,23 @@ function summarizeFlueEvent(event: FlueEvent): FlueEventTraceSummary {
         is_error: event.isError,
         result_summary: summarizeValue(event.result)
       };
-    case 'command_start':
-      return {
-        ...base,
-        command_chars: event.command.length,
-        command_sha256: sha256(event.command),
-        command_args_count: event.args.length
-      };
-    case 'command_end':
-      return {
-        ...base,
-        command_chars: event.command.length,
-        command_sha256: sha256(event.command),
-        exit_code: event.exitCode
-      };
     case 'task_start':
       return { ...base, task_id: event.taskId };
-    case 'task_end':
+    case 'task':
       return { ...base, task_id: event.taskId, is_error: event.isError, result_summary: summarizeValue(event.result) };
-    case 'error':
-      return { ...base, ...summarizeError(event.error) };
+    case 'operation':
+    case 'run_end':
+      return event.error
+        ? { ...base, is_error: event.isError, ...summarizeError(event.error) }
+        : { ...base, is_error: event.isError, result_summary: summarizeValue(event.result) };
+    case 'compaction':
+      return event.error
+        ? { ...base, is_error: event.isError, ...summarizeError(event.error) }
+        : { ...base, is_error: event.isError };
+    case 'submission_settled':
+      return event.error
+        ? { ...base, is_error: event.outcome !== 'completed', ...summarizeError(event.error) }
+        : { ...base, is_error: event.outcome !== 'completed', result_summary: summarizeValue(event.result) };
     default:
       return base;
   }
@@ -215,7 +210,7 @@ function summarizeValue(value: unknown) {
 }
 
 function summarizeError(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = errorMessage(error);
   return {
     error_kind: errorKind(error),
     error_message_chars: message.length,
@@ -223,20 +218,52 @@ function summarizeError(error: unknown) {
   };
 }
 
+/** Only fixed, known operational identifiers are safe to persist verbatim.
+ * Provider-controlled code/name/type values are otherwise hashed. */
+const SAFE_ERROR_KINDS = new Set([
+  'AbortError',
+  'AggregateError',
+  'EACCES',
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'EEXIST',
+  'ENOENT',
+  'EPERM',
+  'ETIMEDOUT',
+  'Error',
+  'RangeError',
+  'ReferenceError',
+  'RUN_FAILED',
+  'SubmissionError',
+  'SyntaxError',
+  'TypeError',
+  'URIError'
+]);
+
 function errorKind(error: unknown) {
-  if (typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string') {
-    return error.code;
+  if (typeof error === 'object' && error !== null) {
+    const candidate = error as Record<string, unknown>;
+    for (const key of ['code', 'name', 'type'] as const) {
+      const value = candidate[key];
+      if (typeof value === 'string' && value.length > 0) {
+        return SAFE_ERROR_KINDS.has(value) ? value : sha256(value);
+      }
+    }
   }
-  if (error instanceof Error) return error.name;
+  if (error instanceof Error) return SAFE_ERROR_KINDS.has(error.name) ? error.name : sha256(error.name);
   return typeof error;
+}
+
+function errorMessage(error: unknown) {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'object' && error !== null && 'message' in error && typeof error.message === 'string') {
+    return error.message;
+  }
+  return String(error);
 }
 
 function addDefined<T extends object, K extends string, V>(target: T, key: K, value: V | undefined): asserts target is T & Record<K, V> {
   if (value !== undefined) Object.assign(target, { [key]: value });
-}
-
-function sha256(text: string) {
-  return `sha256:${createHash('sha256').update(text).digest('hex')}`;
 }
 
 function now() {

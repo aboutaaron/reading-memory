@@ -151,3 +151,12 @@ test('structured fallback cannot attribute an explicitly unrelated article to th
     { url: '/current', mainEntityOfPage: { url: page } }
   ]) assert.equal(extractHtml(structured({ ...publicArticle('Matching current article.'), ...identity }), page + '#fragment').text, 'Matching current article.');
 });
+
+test('keeps an authored single-sentence cookie article without accepting a consent-control shell', () => {
+  const sentence = 'We use cookies to maintain authenticated sessions in our application.';
+  assert.equal(extractHtml(`<article><p>${sentence}</p></article>`).text, sentence);
+  assert.equal(extractHtml(`<div itemprop="articleBody"><p>${sentence}</p></div>`).text, sentence);
+  assert.equal(extractHtml(`<main><p>${sentence}</p><button>Accept all</button></main>`).text, '');
+  assert.equal(extractHtml(`<article><p>${sentence}</p><button>Accept all</button></article>`).text, '');
+  assert.equal(extractHtml(`<article><p>${sentence}</p><form><button>Accept all</button></form></article>`).text, '');
+});

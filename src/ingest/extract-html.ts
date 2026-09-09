@@ -91,14 +91,19 @@ function textFromNode(root: HtmlNode): string {
 // This is a shell-content check, not a minimum article length or a topic filter.
 // A short sentence about privacy is still content. Only recognizable UI-only
 // candidates are rejected; passing this check does not prove completeness.
-function hasArticleText(root: HtmlNode): boolean {
+function hasArticleText(root: HtmlNode, authoredUnits: ReadonlySet<string> = new Set()): boolean {
   const candidate = root.cloneNode(true) as HtmlNode;
   for (const node of candidate.querySelectorAll('a,button,input,select,h1,h2,h3,script,style,noscript,template,head,svg')) node.remove();
   const text = textFromNode(candidate);
   if (!text) return false;
   const units = text.split(/\n+|(?<=[.!?])\s+/).map(value => value.trim()).filter(Boolean);
   const shell = /^(?:(?:we|this (?:site|website)) (?:use|uses) cookies\b|(?:we|our partners) (?:and our partners )?(?:use|process|store|access) (?:your personal data|personal data|information on your device)\b|by (?:clicking|continuing|using this (?:site|website))\b|(?:please )?(?:accept|reject|allow|manage|customize|save) (?:all |your |our |the )?(?:cookies|cookie preferences|preferences|settings|choices)\b|(?:cookie|consent|privacy) (?:settings|preferences|policy|notice|choices|center|centre)$|(?:your privacy|we value your privacy|we respect your privacy|privacy matters|cookies on this site)$|(?:accept all|reject all|accept|reject|continue|close|menu|home|search|sign in|log in|subscribe|all rights reserved)[.!]?$)/i;
-  return units.some(unit => !shell.test(unit));
+  return units.some(unit => !shell.test(unit) || (
+    // First-person cookie statements can be legitimate article content. Only
+    // preserve this ambiguous pattern when the same sentence is present in an
+    // explicit article with no local consent controls, not a main/div shell.
+    /^(?:we|this (?:site|website)) (?:use|uses) cookies\b/i.test(unit) && authoredUnits.has(unit)
+  ));
 }
 
 // Explicit JSON-LD identities must refer to the fetched page. A recommendation
@@ -196,6 +201,12 @@ export function extractHtml(html: string, url = 'https://reading-memory.invalid/
   const fallbackPublisher = cleanMetadata(meta(['og:site_name', 'application-name']), 200);
   const fallbackPublished = publicationTime(meta(['article:published_time', 'datePublished', 'date']));
   const readerDocument = documentFromHtml(html, url);
+  const authoredUnits = new Set<string>();
+  for (const article of readerDocument.querySelectorAll('article,[itemprop="articleBody"]')) {
+    if (article.closest(CHROME) || article.querySelector('button,input,select,[role="button"],[role="dialog"]')) continue;
+    const articleText = textFromNode(article.cloneNode(true) as HtmlNode);
+    for (const unit of articleText.split(/\n+|(?<=[.!?])\s+/)) authoredUnits.add(unit.trim());
+  }
   removeChrome(readerDocument);
 
   try {
@@ -203,7 +214,7 @@ export function extractHtml(html: string, url = 'https://reading-memory.invalid/
     if (article?.content) {
       const articleDocument = documentFromHtml(article.content, url);
       const text = textFromNode(articleDocument.body);
-      if (text && hasArticleText(articleDocument.body)) {
+      if (text && hasArticleText(articleDocument.body, authoredUnits)) {
         return {
           text,
           title: cleanMetadata(article.title) ?? fallbackTitle,
@@ -223,7 +234,7 @@ export function extractHtml(html: string, url = 'https://reading-memory.invalid/
 
   removeChrome(document);
   const root = document.querySelector('[itemprop="articleBody"]') ?? document.querySelector('article,main,[role="main"]') ?? document.body;
-  const usableVisibleText = hasArticleText(root as HtmlNode);
+  const usableVisibleText = hasArticleText(root as HtmlNode, authoredUnits);
   const structuredText = usableVisibleText ? null : structuredArticleBody(document, url);
   return {
     text: usableVisibleText ? textFromNode(root as HtmlNode) : structuredText ?? '',

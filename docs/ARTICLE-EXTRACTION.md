@@ -2,7 +2,7 @@
 
 HTML capture rejects recognizable consent-only and navigation-only output before analysis or indexing. The API returns `FETCH_FAILED` with status 422 when no usable article text remains. The error contains no source text. A failed capture can remain in diagnostics; it is not evidence for answering a question.
 
-This is a conservative check of extracted content, not a word-count threshold or a topic filter. Short substantive notes and articles about cookies or privacy remain eligible. It cannot recognize every language or custom consent interface. A successful extraction does not certify that the complete article was captured.
+This is a conservative check of extracted content, not a word-count threshold or a topic filter. Short substantive notes and articles about cookies or privacy remain eligible. Ambiguous first-person cookie statements can be retained when they occur in explicit article markup without local consent controls; the same statement in a page-control shell is rejected. It cannot recognize every language or custom consent interface. A successful extraction does not certify that the complete article was captured.
 
 ## Fallback behavior
 

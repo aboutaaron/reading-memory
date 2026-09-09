@@ -210,3 +210,65 @@ test('forgetting or replacing relationships while provider is pending cannot lea
     });
   }
 });
+
+test('graph mode diversifies repeated captures, skips same-family neighbors and refills direct ranks', async t => {
+  const db = database(t);
+  for (const id of ['a', 'b', 'c', 'd', 'e', 'f']) item(db, id, 'Cache invalidation.');
+  // The first three ranked captures represent one source; a fourth version is a graph neighbor.
+  for (const id of ['a', 'b', 'c']) db.prepare('UPDATE items SET canonical_url = ? WHERE id = ?').run('https://example.test/shared', id);
+  item(db, 'duplicate', 'An updated source passage.');
+  db.prepare("UPDATE items SET final_url = 'https://example.test/shared', source_type = 'pdf_url' WHERE id = 'duplicate'").run();
+  item(db, 'independent', 'Ownership enables freshness.');
+  edge(db, 'a-duplicate', 'a', 'duplicate');
+  edge(db, 'b-independent', 'a', 'independent');
+  const before = await queryHybridCorpus(db, { query: 'cache invalidation', topK: 5 }, null);
+  const result = await queryGraphCorpus(db, { query: 'cache invalidation', topK: 5 }, null);
+  assert.deepEqual(before.citations, ['a', 'b', 'c', 'd', 'e']);
+  assert.deepEqual(result.citations, ['a', 'd', 'e', 'independent', 'f']);
+  assert.equal(new Set(result.results.map(hit => hit.source_family.id)).size, 5);
+  assert.equal(result.graph_expansion.suppressed_direct_family_candidates, 2);
+  assert.equal(result.graph_expansion.suppressed_graph_family_candidates, 1);
+  assert.equal(result.graph_expansion.base_candidate_limit, 25);
+  assert.deepEqual((await queryHybridCorpus(db, { query: 'cache invalidation', topK: 5 }, null)).citations, before.citations);
+  assert.equal(db.prepare('SELECT count(*) AS count FROM items').get()?.count, 8);
+});
+
+test('model duplicate labels do not suppress distinct URLs or unknown sources', async t => {
+  const db = database(t);
+  item(db, 'seed', 'Cache invalidation.');
+  item(db, 'peer', 'Independent evidence.');
+  db.prepare("UPDATE items SET title = 'Same title', canonical_url = 'https://first.test/article' WHERE id = 'seed'").run();
+  db.prepare("UPDATE items SET title = 'Same title', canonical_url = 'https://second.test/article' WHERE id = 'peer'").run();
+  edge(db, 'edge', 'seed', 'peer', { type: 'duplicates_angle' });
+  const result = await queryGraphCorpus(db, { query: 'cache invalidation' }, null);
+  assert.deepEqual(result.citations, ['seed', 'peer']);
+  assert.notEqual(result.results[0]?.source_family.id, result.results[1]?.source_family.id);
+  assert.equal(result.graph_expansion.suppressed_graph_family_candidates, 0);
+});
+
+test('family suppression never reports hidden or forgotten members and respects tag visibility', async t => {
+  const db = database(t);
+  item(db, 'hidden-ancestor', 'Hidden ancestor passage.', { tag: 'private' });
+  item(db, 'seed', 'Cache invalidation.', { tag: 'infra' });
+  item(db, 'peer', 'Independent evidence.', { tag: 'infra' });
+  db.prepare("UPDATE items SET supersedes_item_id = 'hidden-ancestor' WHERE id IN ('seed', 'peer')").run();
+  edge(db, 'edge', 'seed', 'peer');
+  const filtered = await queryGraphCorpus(db, { query: 'cache invalidation', tags: ['infra'] }, null);
+  assert.deepEqual(filtered.citations, ['seed', 'peer']);
+  assert.doesNotMatch(JSON.stringify(filtered), /hidden-ancestor|Hidden ancestor/);
+  db.prepare("DELETE FROM items WHERE id = 'hidden-ancestor'").run();
+  const forgotten = await queryGraphCorpus(db, { query: 'cache invalidation' }, null);
+  assert.deepEqual(forgotten.citations, ['seed', 'peer']);
+  assert.doesNotMatch(JSON.stringify(forgotten), /hidden-ancestor|Hidden ancestor/);
+});
+
+test('composed URL and lineage identity suppresses a repeated revised source in graph results', async t => {
+  const db = database(t);
+  for (const id of ['old', 'revision', 'repeat', 'other']) item(db, id, 'Cache invalidation.');
+  db.prepare("UPDATE items SET canonical_url = 'https://example.test/old' WHERE id = 'old'").run();
+  db.prepare("UPDATE items SET canonical_url = 'https://example.test/revised' WHERE id IN ('revision', 'repeat')").run();
+  db.prepare("UPDATE items SET supersedes_item_id = 'old' WHERE id = 'revision'").run();
+  const result = await queryGraphCorpus(db, { query: 'cache invalidation', topK: 5 }, null);
+  assert.deepEqual(result.citations, ['old', 'other']);
+  assert.equal(result.graph_expansion.suppressed_direct_family_candidates, 2);
+});

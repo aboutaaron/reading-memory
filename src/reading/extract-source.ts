@@ -10,11 +10,7 @@ import { cleanMetadata, extractHtml } from '../ingest/extract-html.js';
 type ExtractionDependencies = { fetchUrl?: typeof fetchUrl; extractPdfText?: typeof extractPdfText };
 
 export async function extractSource(request: IngestRequest, signal?: AbortSignal, dependencies: ExtractionDependencies = {}) {
-  if (request.source_type !== request.source.type) {
-    throw new ApiError('BAD_REQUEST', 'source_type must match source.type', 400);
-  }
-
-  if (request.source.type === 'text') {
+  if (request.source_type === 'text') {
     if (request.source.text.length > LIMITS.maxTextChars) {
       throw new ApiError('PAYLOAD_TOO_LARGE', 'Text source exceeds character limit', 413);
     }
@@ -49,12 +45,12 @@ export async function extractSource(request: IngestRequest, signal?: AbortSignal
 
   const url = request.source.url;
   const fetchOptions: Parameters<typeof fetchUrl>[1] = {
-    maxBytes: request.source.type === 'pdf_url' ? LIMITS.maxPdfBytes : LIMITS.maxUrlBytes
+    maxBytes: request.source_type === 'pdf_url' ? LIMITS.maxPdfBytes : LIMITS.maxUrlBytes
   };
   if (signal) fetchOptions.signal = signal;
   const fetched = await (dependencies.fetchUrl ?? fetchUrl)(url, fetchOptions);
 
-  if (request.source.type === 'pdf_url' && fetched.mime !== 'application/pdf') {
+  if (request.source_type === 'pdf_url' && fetched.mime !== 'application/pdf') {
     throw new ApiError('UNSUPPORTED_MIME', `Expected PDF MIME type, got ${fetched.mime}`, 415);
   }
 
@@ -72,7 +68,7 @@ export async function extractSource(request: IngestRequest, signal?: AbortSignal
   if (!normalized.text) throw new ApiError('FETCH_FAILED', 'Source contains no readable text', 422);
 
   return {
-    sourceType: request.source.type,
+    sourceType: request.source_type,
     sourceUri: url,
     canonicalUrl: canonicalizeUrl(url),
     finalUrl: fetched.finalUrl,
@@ -103,7 +99,9 @@ export async function extractSource(request: IngestRequest, signal?: AbortSignal
 export function payloadHash(request: IngestRequest): string {
   return sha256(stableJson({
     source_type: request.source_type,
-    source: request.source,
+    // Preserve the pre-simplification canonical digest so persisted request IDs
+    // replay across upgrades. This derived field is only a storage encoding.
+    source: { ...request.source, type: request.source_type },
     source_context: request.source_context ?? null,
     ingest_reason: request.ingest_reason ?? null
   }));

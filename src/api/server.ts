@@ -66,7 +66,7 @@ export function createReadingApi(
         limiter.check(principal, 'ingest');
         const deadline = Date.now() + LIMITS.maxSyncResponseSeconds * 1000;
         const raw = await readRequestBody();
-        const body = v.parse(IngestRequestSchema, normalizeSourceShape(raw));
+        const body = v.parse(IngestRequestSchema, raw);
         const response = await store.ingest({
           principal,
           requestId: body.request_id,
@@ -174,14 +174,6 @@ function normalizeError(error: unknown) {
     return new ApiError('BAD_REQUEST', error.message, 400);
   }
   return error;
-}
-
-function normalizeSourceShape(raw: unknown) {
-  if (!raw || typeof raw !== 'object') return raw;
-  const obj = raw as Record<string, unknown>;
-  const source = obj.source as Record<string, unknown> | undefined;
-  if (!source || source.type) return raw;
-  return { ...obj, source: { ...source, type: obj.source_type } };
 }
 
 async function readJson(req: IncomingMessage): Promise<unknown> {

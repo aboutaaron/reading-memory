@@ -1,109 +1,161 @@
 import type { Database } from '../db/connection.js';
 
+const CANDIDATE_LIMIT = 8;
+const SKIP_LIMIT = 10;
+
 export function briefGuide(db: Database, input: { briefDate: string; lookbackHours?: number; focus?: string[] }) {
-  const lookback = input.lookbackHours ?? 36;
-  const briefAt = parseBriefDate(input.briefDate);
-  const since = new Date(briefAt.getTime() - lookback * 60 * 60 * 1000).toISOString();
+  // A date describes the complete UTC day, including late arrivals. The upper
+  // bound is exclusive so a historical brief cannot select tomorrow's reading.
+  const until = briefDayEnd(input.briefDate);
+  const since = new Date(until.getTime() - (input.lookbackHours ?? 36) * 60 * 60 * 1000).toISOString();
   const focus = input.focus ?? [];
   const rows = db.prepare(`
-    SELECT i.id AS item_id, i.title, i.source_uri, a.summary, a.relevance_json, a.confidence,
-      be.event_kind AS latest_event_kind, be.brief_date AS latest_event_date, be.rationale AS latest_event_rationale,
-      be.resurface_after AS latest_resurface_after
-    FROM items i
-    JOIN analyses a ON a.item_id = i.id
-    LEFT JOIN brief_events be ON be.id = (
-      SELECT id FROM brief_events
-      WHERE item_id = i.id AND brief_date <= ?
-      ORDER BY brief_date DESC, created_at DESC
-      LIMIT 1
-    )
-    WHERE i.ingested_at >= ?
-      AND (
-        ? = 0 OR EXISTS (
-          SELECT 1 FROM tags t
-          WHERE t.item_id = i.id AND t.tag IN (${focus.map(() => '?').join(',') || "''"})
-        )
+    WITH params AS (
+      SELECT ? AS brief_date, ? AS until, ? AS since, ? AS focus
+    ), event_history AS (
+      SELECT be.*, ROW_NUMBER() OVER (
+        PARTITION BY be.item_id ORDER BY be.brief_date DESC, be.created_at DESC, be.rowid DESC
+      ) AS event_order
+      FROM brief_events be, params p
+      WHERE be.brief_date <= p.brief_date
+    ), event_positions AS (
+      SELECT item_id,
+        MIN(CASE WHEN event_kind IN ('included', 'resurfaced') THEN event_order END) AS consumed_order,
+        MIN(CASE WHEN resurface_after IS NOT NULL THEN event_order END) AS scheduled_order
+      FROM event_history GROUP BY item_id
+    ), item_state AS (
+      SELECT i.id AS item_id, i.title, i.source_uri, i.canonical_url, i.final_url, i.ingested_at,
+        a.relevance_json, a.recommended_action, a.confidence, a.reason,
+        COALESCE(json_extract(a.relevance_json, '$.score'), 0) AS relevance_score,
+        latest.event_kind AS latest_event_kind, latest.rationale AS latest_event_rationale,
+        consumed.event_kind AS consumed_kind, consumed.brief_date AS consumed_date,
+        CASE WHEN scheduled.event_order < consumed.event_order OR consumed.event_order IS NULL
+          OR (scheduled.event_order = consumed.event_order AND scheduled.resurface_after > consumed.brief_date)
+          THEN scheduled.resurface_after END AS resurface_after,
+        CASE WHEN scheduled.event_order < consumed.event_order OR consumed.event_order IS NULL
+          OR (scheduled.event_order = consumed.event_order AND scheduled.resurface_after > consumed.brief_date)
+          THEN scheduled.rationale END AS resurface_rationale,
+        (
+          SELECT tag FROM tags t
+          WHERE t.item_id = i.id AND (json_array_length(p.focus) = 0 OR t.tag IN (SELECT value FROM json_each(p.focus)))
+          ORDER BY t.confidence DESC, t.tag ASC LIMIT 1
+        ) AS matching_tag
+      FROM items i CROSS JOIN params p
+      JOIN analyses a ON a.id = (
+        SELECT id FROM analyses
+        WHERE item_id = i.id AND created_at < p.until
+        ORDER BY created_at DESC, rowid DESC LIMIT 1
       )
-    ORDER BY a.confidence DESC, i.ingested_at DESC
-    LIMIT 25
-  `).all(input.briefDate, since, focus.length, ...focus) as Array<{
-    item_id: string;
-    title: string | null;
-    source_uri: string | null;
-    summary: string;
-    relevance_json: string;
-    confidence: number;
-    latest_event_kind: string | null;
-    latest_event_date: string | null;
-    latest_event_rationale: string | null;
-    latest_resurface_after: string | null;
-  }>;
+      LEFT JOIN event_positions ep ON ep.item_id = i.id
+      LEFT JOIN event_history latest ON latest.item_id = i.id AND latest.event_order = 1
+      LEFT JOIN event_history consumed ON consumed.item_id = i.id AND consumed.event_order = ep.consumed_order
+      LEFT JOIN event_history scheduled ON scheduled.item_id = i.id AND scheduled.event_order = ep.scheduled_order
+      WHERE i.status = 'indexed' AND i.ingested_at < p.until
+        AND (json_array_length(p.focus) = 0 OR EXISTS (
+          SELECT 1 FROM tags t WHERE t.item_id = i.id AND t.tag IN (SELECT value FROM json_each(p.focus))
+        ))
+    ), considered AS (
+      SELECT s.*, CASE WHEN resurface_after <= p.brief_date THEN 1 ELSE 0 END AS is_due,
+        CASE
+          WHEN resurface_after > p.brief_date THEN 'deferred until ' || resurface_after
+          WHEN consumed_kind IS NOT NULL AND resurface_after IS NULL
+            THEN 'recently ' || consumed_kind || ' on ' || consumed_date
+          WHEN recommended_action = 'skip' AND (resurface_after IS NULL OR resurface_after > p.brief_date)
+            THEN 'analysis recommends skip'
+          ELSE NULL
+        END AS skip_reason
+      FROM item_state s CROSS JOIN params p
+      WHERE ingested_at >= p.since OR resurface_after IS NOT NULL
+    ), ranked AS (
+      SELECT *, ROW_NUMBER() OVER (
+        PARTITION BY skip_reason IS NULL
+        ORDER BY is_due DESC,
+          CASE recommended_action WHEN 'brief' THEN 0 WHEN 'save' THEN 1 ELSE 2 END,
+          relevance_score DESC, confidence DESC, ingested_at DESC, item_id ASC
+      ) AS selection_rank
+      FROM considered
+    ), output AS (
+      SELECT *, CASE WHEN skip_reason IS NULL AND selection_rank <= ? THEN 1 ELSE 0 END AS selected
+      FROM ranked
+    )
+    SELECT * FROM output WHERE selected = 1
+    UNION ALL
+    SELECT * FROM (
+      SELECT * FROM output WHERE selected = 0
+      ORDER BY skip_reason IS NULL DESC, selection_rank ASC, item_id ASC LIMIT ?
+    )
+    ORDER BY selected DESC, selection_rank ASC, item_id ASC
+  `).all(input.briefDate, until.toISOString(), since, JSON.stringify(focus), CANDIDATE_LIMIT, SKIP_LIMIT) as BriefRow[];
 
-  const candidates = rows
-    .map((row) => ({ row, relevance: JSON.parse(row.relevance_json) as { themes: string[]; score: number } }))
-    .filter(({ row }) => isEligibleForBrief(row, input.briefDate))
-    .slice(0, 8)
-    .map(({ row, relevance }) => ({
+  const candidates = rows.filter((row) => row.selected === 1).map((row) => {
+    const relevance = JSON.parse(row.relevance_json) as { themes?: string[] };
+    const themes = relevance.themes ?? [];
+    return {
       item_id: row.item_id,
       title: row.title,
-      why_now: row.summary.slice(0, 240),
-      themes: relevance.themes,
-      suggested_lane: relevance.themes[0] ?? 'Reading Corpus',
+      source_uri: row.source_uri,
+      canonical_url: row.canonical_url,
+      final_url: row.final_url,
+      why_now: whyNow(row, focus.length > 0),
+      themes,
+      suggested_lane: row.matching_tag ?? themes[0] ?? 'Reading Corpus',
+      relevance_score: row.relevance_score,
+      recommended_action: row.recommended_action,
       confidence: row.confidence,
-      resurfacing_note: row.latest_event_kind ? resurfaceNote(row, input.briefDate) : null
-    }));
-
-  const skipped = rows
-    .filter((row) => !candidates.some((candidate) => candidate.item_id === row.item_id))
-    .slice(0, 10)
-    .map((row) => ({ item_id: row.item_id, reason: skipReason(row, input.briefDate) }));
+      resurfacing_note: row.is_due
+        ? `resurfacing after ${row.resurface_after}`
+        : row.latest_event_rationale
+    };
+  });
 
   return {
     brief_date: input.briefDate,
     candidates,
     theme_clusters: clusterThemes(candidates.flatMap((candidate) => candidate.themes)),
-    skip_items: skipped
+    skip_items: rows.filter((row) => row.selected === 0).map((row) => ({
+      item_id: row.item_id,
+      reason: row.skip_reason ?? 'lower priority after scheduled items, brief recommendation, and relevance'
+    }))
   };
 }
 
 type BriefRow = {
-  latest_event_kind: string | null;
-  latest_event_date: string | null;
+  item_id: string;
+  title: string | null;
+  source_uri: string | null;
+  canonical_url: string | null;
+  final_url: string | null;
+  relevance_json: string;
+  relevance_score: number;
+  recommended_action: string;
+  confidence: number;
+  reason: string | null;
+  matching_tag: string | null;
   latest_event_rationale: string | null;
-  latest_resurface_after: string | null;
+  resurface_after: string | null;
+  resurface_rationale: string | null;
+  is_due: number;
+  skip_reason: string | null;
+  selected: number;
 };
 
-function parseBriefDate(briefDate: string) {
-  const isoDate = /^\d{4}-\d{2}-\d{2}$/.test(briefDate) ? `${briefDate}T12:00:00.000Z` : briefDate;
-  const parsed = new Date(isoDate);
-  if (Number.isNaN(parsed.getTime())) throw new Error(`Invalid brief_date: ${briefDate}`);
-  return parsed;
-}
-
-function isEligibleForBrief(row: BriefRow, briefDate: string) {
-  if (!row.latest_event_kind) return true;
-  if (row.latest_event_kind === 'included' && !hasResurfaced(row, briefDate)) return false;
-  if (row.latest_resurface_after && row.latest_resurface_after > briefDate) return false;
-  return true;
-}
-
-function hasResurfaced(row: BriefRow, briefDate: string) {
-  return Boolean(row.latest_resurface_after && row.latest_resurface_after <= briefDate);
-}
-
-function skipReason(row: BriefRow, briefDate: string) {
-  if (row.latest_resurface_after && row.latest_resurface_after > briefDate) {
-    return `deferred until ${row.latest_resurface_after}`;
+function briefDayEnd(briefDate: string) {
+  const start = new Date(`${briefDate}T00:00:00.000Z`);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(briefDate) || Number.isNaN(start.getTime()) || start.toISOString().slice(0, 10) !== briefDate) {
+    throw new Error(`Invalid brief_date: ${briefDate}`);
   }
-  if (row.latest_event_kind === 'included' && !hasResurfaced(row, briefDate)) {
-    return `recently included on ${row.latest_event_date}`;
-  }
-  return 'outside focus or lower confidence';
+  return new Date(start.getTime() + 24 * 60 * 60 * 1000);
 }
 
-function resurfaceNote(row: BriefRow, briefDate: string) {
-  if (hasResurfaced(row, briefDate)) return `resurfacing after ${row.latest_resurface_after}`;
-  return row.latest_event_rationale ?? null;
+function whyNow(row: BriefRow, focused: boolean) {
+  const selection = row.is_due
+    ? `Scheduled to resurface on ${row.resurface_after}${row.recommended_action === 'skip' ? '; the explicit schedule overrides the analysis skip recommendation' : ''}.`
+    : row.recommended_action === 'brief'
+      ? 'Recent reading recommended for a brief.'
+      : 'Recent saved reading eligible for a brief.';
+  const focus = focused && row.matching_tag ? ` Matches focus: ${row.matching_tag}.` : '';
+  const rationale = row.is_due ? row.resurface_rationale : row.reason;
+  return `${selection}${focus} ${rationale?.trim() || 'The original analysis rationale was not recorded.'}`.slice(0, 600);
 }
 
 function clusterThemes(themes: string[]) {

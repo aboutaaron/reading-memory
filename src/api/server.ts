@@ -8,7 +8,7 @@ import type { Database } from '../db/connection.js';
 import { ApiError, toErrorPayload } from './errors.js';
 import { requireAuth } from './auth.js';
 import { RateLimiter } from './rate-limit.js';
-import { BriefEventsRequestSchema, BriefGuideRequestSchema, IngestRequestSchema, QueryRequestSchema } from './contracts.js';
+import { AnnotationRequestSchema, BriefEventsRequestSchema, BriefGuideRequestSchema, IngestRequestSchema, QueryRequestSchema } from './contracts.js';
 import { ItemStore } from '../reading/item-store.js';
 import {
   createFlueReadingAnalyzer,
@@ -20,15 +20,18 @@ import { extractSource, payloadHash } from '../reading/extract-source.js';
 import { briefGuide } from '../reading/brief-guide.js';
 import { getItem, queryCorpus } from '../reading/corpus-query.js';
 import { BriefEventStore, briefEventsPayloadHash } from '../reading/brief-events.js';
+import { ReaderAnnotationStore } from '../reading/reader-annotations.js';
 
 export function createReadingApi(
   config: AppConfig,
   db: Database,
-  options: { analyzer?: ReadingAnalyzer; analyzerHealth?: () => AnalyzerHealth } = {}
+  options: { analyzer?: ReadingAnalyzer; analyzerHealth?: () => AnalyzerHealth; extractor?: typeof extractSource } = {}
 ) {
   const limiter = new RateLimiter({ ingest: 10, query: 30, brief: 10 });
   const store = new ItemStore(db);
   const briefEventStore = new BriefEventStore(db);
+  const annotations = new ReaderAnnotationStore(db);
+  const extractor = options.extractor ?? extractSource;
   const analyzer = options.analyzer ?? createFlueReadingAnalyzer(db, { model: config.flueModel, tracePath: config.flueTracePath });
   const analyzerHealth = options.analyzerHealth ?? (options.analyzer
     ? () => ({ status: 'ok' as const, warn: false })
@@ -56,14 +59,15 @@ export function createReadingApi(
         const deadline = Date.now() + LIMITS.maxSyncResponseSeconds * 1000;
         const raw = await readJson(req);
         const body = v.parse(IngestRequestSchema, normalizeSourceShape(raw));
-        const source = await withTimeout((signal) => extractSource(body, signal), remainingMs(deadline));
         const response = await store.ingest({
           principal,
           requestId: body.request_id,
           payloadHash: payloadHash(body),
-          source,
-          analyze: (itemId) => withTimeout(
-            (signal) => analyzer({ itemId, title: source.title, text: source.extractedText, sessionId: `analysis:${itemId}:${body.request_id}`, signal }),
+          extract: () => withTimeout((signal) => extractor(body, signal), remainingMs(deadline)),
+          analyze: (itemId, source) => withTimeout(
+            (signal) => analyzer({ itemId, title: source.title, text: source.extractedText,
+              readerContext: { source_context: body.source_context ?? null, ingest_reason: body.ingest_reason ?? null },
+              sessionId: `analysis:${itemId}:${body.request_id}`, signal }),
             remainingMs(deadline)
           )
         });
@@ -100,6 +104,14 @@ export function createReadingApi(
           payloadHash: briefEventsPayloadHash(body),
           body
         });
+        return send(res, 200, { ok: true, request_id: body.request_id, data, error: null });
+      }
+
+      const annotationMatch = /^\/items\/([^/]+)\/annotations$/.exec(url.pathname);
+      if (req.method === 'POST' && annotationMatch?.[1]) {
+        limiter.check(principal, 'ingest');
+        const body = v.parse(AnnotationRequestSchema, await readJson(req));
+        const data = annotations.record({ principal, requestId: body.request_id, itemId: annotationMatch[1], body });
         return send(res, 200, { ok: true, request_id: body.request_id, data, error: null });
       }
 
@@ -199,6 +211,10 @@ function capabilities() {
     supported_ingest_types: ['url', 'text', 'pdf_url'],
     query_modes: ['fts'],
     supports_brief_events: true,
+    supports_reader_annotations: true,
+    query_confidence: 'uncalibrated; null for matches, zero for empty results',
+    query_matching: 'meaningful terms across the full question; AND with explicit partial-term OR fallback',
+    brief_time_boundary: 'UTC end of brief_date, exclusive next midnight',
     max_sync_response_seconds: LIMITS.maxSyncResponseSeconds,
     idempotency_ttl_seconds: LIMITS.idempotencyTtlSeconds,
     max_text_chars: LIMITS.maxTextChars,

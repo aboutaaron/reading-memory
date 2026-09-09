@@ -50,6 +50,16 @@ Call `POST /query` before answering questions that may depend on stored reading 
 
 Use returned items as evidence, not as final answers. If query results are weak or empty, say so.
 
+Read `match_strategy` and `matched_terms`: partial matches may cover only part of the question. Lexical retrieval may miss paraphrases without shared terms. `confidence: null` means uncalibrated, and the compatibility `answer` field is empty. Do not turn the number of results or a lexical score into certainty. Use `GET /items/:id` to inspect retained source text, truncation, rationale, and relationship evidence before making claims that depend on them.
+
+## Preserve Reader Judgment
+
+Use `POST /items/:id/annotations` for an explicit reader reaction, question, or correction worth preserving. Provide a fresh `request_id`, `actor_type` (`user` or `agent`), `actor`, and exact `note`; optionally include `project` and `question`. User notes must reflect statements the user actually made. Label your own interpretations as agent notes. Saving, citing, or including a source in a brief does not mean the user agrees with it.
+
+For a correction, append a new annotation with `supersedes_annotation_id` referring to the active note on the same item. The old note stays in history; only active notes are indexed and supplied as current context. Item reads return `reader_annotations` and their `active` state. An annotation does not reanalyze the item immediately.
+
+Use `ingest_reason` and `source_context` to explain why a new capture matters. Duplicate ingest retains existing provenance; record a new reaction to an existing source through annotations. Model relationships include `origin: model` and exact source quotations; theme suggestions have `origin: heuristic`. Exact quotation checks establish provenance, not whether the model's interpretation is correct.
+
 ## When To Use Brief Guide
 
 Call `POST /brief-guide` when preparing a digest, morning brief, reading roundup, or source-selection pass.
@@ -64,6 +74,7 @@ Brief event rules:
 - `skipped` events must set `included_bool` to `false`.
 - Use `included` when a brief uses an item, `skipped` when a returned item is deliberately not used, and `resurfaced` when a previously deferred item reappears with a new angle.
 - Set `resurface_after` on an included item only when it should be eligible again after that date. Omitting it suppresses normal repeats after inclusion.
+- An explicit due schedule can bring back older reading outside the normal lookback and override an analysis skip recommendation. Included and resurfaced events both count as use; a later skipped event does not erase that history. Dates cover complete UTC days.
 - Batch `skip_items` from `/brief-guide` into `/brief-events` as `skipped` when the caller intentionally rejects them.
 
 ## API Shape
@@ -159,7 +170,7 @@ Use the schema command when unsure of allowed event names, required payload fiel
 
 If resuming, inspect `run.md` or run `npm run run-ledger -- status -- --run <run-dir>`. Handle pending external-action verification before making new decisions. A `memory_capture_recorded` item id is not proof that inbox actions finished.
 
-Run the Reading Memory eval before accepting model, ranking, dedupe, or brief-guide behavior changes:
+Run the Reading Memory eval before accepting ranking, dedupe, or brief-guide changes. It uses canned analyses; model-quality changes need a separate reviewed live-model evaluation:
 
 ```bash
 npm run eval:reading

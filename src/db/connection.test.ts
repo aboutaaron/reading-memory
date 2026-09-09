@@ -5,6 +5,7 @@ import { mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { migrate, openDatabase, openMemoryDatabase, reconcileFts } from './connection.js';
+import { CURRENT_USER_VERSION } from './migrations.js';
 import { ItemStore } from '../reading/item-store.js';
 import { queryCorpus } from '../reading/corpus-query.js';
 import type { Analysis, ExtractedSource } from '../reading/types.js';
@@ -148,6 +149,10 @@ test('migrates existing v1 database to current schema without dropping corpus ro
       id, source_type, title, ingested_at, content_hash, status, extracted_text, truncated, provenance_json
     ) VALUES ('item_v1', 'text', 'V1 item', ?, 'sha256:v1', 'indexed', 'semantic layer text', 0, '{}')
   `).run(new Date().toISOString());
+  db.prepare(`INSERT INTO items (
+    id, source_type, title, ingested_at, content_hash, status, extracted_text, truncated, provenance_json
+  ) VALUES ('item_v1_truncated', 'url', 'Old prefix', ?, 'sha256:old-prefix', 'indexed', 'old prefix', 1, '{}')`)
+    .run(new Date().toISOString());
   db.close();
 
   const migrated = openDatabase(path);
@@ -156,8 +161,13 @@ test('migrates existing v1 database to current schema without dropping corpus ro
   const briefEvents = migrated.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'brief_events'").get();
   const canonicalIndex = migrated.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_items_canonical_url'").get();
 
-  assert.equal(version.user_version, 2);
+  assert.equal(version.user_version, CURRENT_USER_VERSION);
   assert.equal(item.title, 'V1 item');
+  assert.equal(migrated.prepare("SELECT content_hash FROM items WHERE id = 'item_v1_truncated'").get()?.content_hash,
+    'legacy-prefix:sha256:old-prefix');
+  assert.ok(migrated.prepare("SELECT name FROM sqlite_master WHERE name = 'reader_annotations'").get());
+  assert.deepEqual(migrated.prepare('PRAGMA foreign_key_check').all(), []);
+  assert.equal(queryCorpus(migrated, { query: 'semantic layer' }).results[0]?.item_id, 'item_v1');
   assert.ok(briefEvents);
   assert.ok(canonicalIndex);
   migrated.close();

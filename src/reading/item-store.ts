@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import type { Database } from '../db/connection.js';
-import { transaction } from '../db/connection.js';
+import { transaction, rebuildItemFts } from '../db/connection.js';
 import { ApiError } from '../api/errors.js';
 import { LIMITS } from '../config.js';
 import type { Analysis, ExtractedSource, RelatedItem } from './types.js';
+import { extractSearchTerms, toFtsQuery } from './search-terms.js';
 
 export type IngestResponse = {
   item_id: string;
@@ -12,6 +13,10 @@ export type IngestResponse = {
   title: string | null;
   source_uri: string | null;
   content_hash: string;
+  truncated: boolean;
+  author: string | null;
+  publisher: string | null;
+  published_at: string | null;
   summary: string;
   core_claims: string[];
   tags: Array<{ tag: string; reason: string; confidence: number }>;
@@ -23,24 +28,44 @@ export type IngestResponse = {
   related_items: RelatedItem[];
 };
 
-export class ItemStore {
-  private readonly inFlight = new Map<string, { payloadHash: string; promise: Promise<IngestResponse> }>();
+type InFlightIngest = { payloadHash: string; promise: Promise<IngestResponse> };
+const inFlightIngests = new WeakMap<Database, Map<string, InFlightIngest>>();
 
-  constructor(private readonly db: Database) {}
+function inFlightFor(db: Database) {
+  let pending = inFlightIngests.get(db);
+  if (!pending) {
+    pending = new Map();
+    inFlightIngests.set(db, pending);
+  }
+  return pending;
+}
+
+/** Other write operations share request IDs with ingestion, including while it awaits I/O. */
+export function assertNoInFlightIngest(db: Database, principal: string, requestId: string) {
+  if (inFlightIngests.get(db)?.has(`${principal}\0${requestId}`)) {
+    throw new ApiError('IDEMPOTENCY_CONFLICT', 'request_id is already in progress for an ingest operation', 409);
+  }
+}
+
+export class ItemStore {
+  private readonly inFlight: Map<string, InFlightIngest>;
+
+  constructor(private readonly db: Database) {
+    this.inFlight = inFlightFor(db);
+  }
 
   async ingest(input: {
     principal: string;
     requestId: string;
     payloadHash: string;
-    source: ExtractedSource;
-    analyze: (itemId: string) => Promise<Analysis>;
-  }): Promise<IngestResponse> {
+    analyze: (itemId: string, source: ExtractedSource) => Promise<Analysis>;
+  } & ({ source: ExtractedSource; extract?: never } | { extract: () => Promise<ExtractedSource>; source?: never })): Promise<IngestResponse> {
     const existingReplay = this.getIdempotency(input.principal, input.requestId);
     if (existingReplay) {
       if (existingReplay.payload_hash !== input.payloadHash) {
         throw new ApiError('IDEMPOTENCY_CONFLICT', 'request_id has already been used with a different payload', 409);
       }
-      return normalizeIngestReplay(JSON.parse(existingReplay.response_snapshot));
+      return normalizeIngestReplay(this.db, JSON.parse(existingReplay.response_snapshot));
     }
 
     const inFlightKey = `${input.principal}\0${input.requestId}`;
@@ -55,7 +80,11 @@ export class ItemStore {
       };
     }
 
-    const promise = this.ingestFresh(input).finally(() => this.inFlight.delete(inFlightKey));
+    // Register the operation before any extraction so concurrent retries share network work.
+    const promise = Promise.resolve().then(async () => {
+      const source = input.source ?? await input.extract();
+      return this.ingestFresh({ ...input, source, analyze: (itemId) => input.analyze(itemId, source) });
+    }).finally(() => this.inFlight.delete(inFlightKey));
     this.inFlight.set(inFlightKey, { payloadHash: input.payloadHash, promise });
     return await promise;
   }
@@ -104,9 +133,9 @@ export class ItemStore {
       const itemId = `item_${randomUUID().replace(/-/g, '').slice(0, 16)}`;
       this.db.prepare(`
         INSERT INTO items (
-          id, source_type, source_uri, canonical_url, final_url, title, ingested_at,
+          id, source_type, source_uri, canonical_url, final_url, title, author, publisher, published_at, ingested_at,
           content_hash, raw_bytes_hash, status, extracted_text, truncated, supersedes_item_id, provenance_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'analyzing', ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'analyzing', ?, ?, ?, ?)
       `).run(
         itemId,
         input.source.sourceType,
@@ -114,6 +143,9 @@ export class ItemStore {
         input.source.canonicalUrl,
         input.source.finalUrl,
         input.source.title,
+        input.source.author ?? null,
+        input.source.publisher ?? null,
+        input.source.publishedAt ?? null,
         now,
         input.source.contentHash,
         input.source.rawBytesHash,
@@ -168,13 +200,14 @@ export class ItemStore {
   private insertAnalysis(itemId: string, analysis: Analysis, now: string) {
     this.db.prepare(`
       INSERT INTO analyses (
-        id, item_id, summary, claims_json, relevance_json, recommended_action,
+        id, item_id, summary, reason, claims_json, relevance_json, recommended_action,
         confidence, model, analysis_version, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       `analysis_${randomUUID().replace(/-/g, '').slice(0, 16)}`,
       itemId,
       analysis.summary,
+      analysis.reason,
       JSON.stringify(analysis.claims),
       JSON.stringify(analysis.relevance),
       analysis.recommended_action,
@@ -188,8 +221,8 @@ export class ItemStore {
     for (const tag of analysis.tags) insertTag.run(itemId, tag.tag, tag.reason, tag.confidence);
 
     const insertRelationship = this.db.prepare(`
-      INSERT OR IGNORE INTO relationships (id, from_item_id, to_item_id, relation_type, explanation, confidence, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT OR IGNORE INTO relationships (id, from_item_id, to_item_id, relation_type, explanation, confidence, created_at, origin, evidence_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     for (const relationship of analysis.relationships) {
       insertRelationship.run(
@@ -199,22 +232,15 @@ export class ItemStore {
         relationship.relation_type,
         relationship.explanation,
         relationship.confidence,
-        now
+        now,
+        relationship.origin ?? (relationship.evidence ? 'model' : 'heuristic'),
+        relationship.evidence ? JSON.stringify(relationship.evidence) : null
       );
     }
   }
 
   private rebuildFts(itemId: string) {
-    this.db.prepare('DELETE FROM item_fts WHERE item_id = ?').run(itemId);
-    this.db.prepare(`
-      INSERT INTO item_fts (item_id, title, body, summary, tags)
-      SELECT i.id, coalesce(i.title, ''), i.extracted_text, coalesce(a.summary, ''), coalesce(group_concat(t.tag, ' '), '')
-      FROM items i
-      LEFT JOIN analyses a ON a.item_id = i.id
-      LEFT JOIN tags t ON t.item_id = i.id
-      WHERE i.id = ?
-      GROUP BY i.id
-    `).run(itemId);
+    rebuildItemFts(this.db, itemId);
   }
 
   private responseForExisting(itemId: string, dedupeStatus: IngestResponse['dedupe_status']): IngestResponse {
@@ -237,11 +263,15 @@ export class ItemStore {
   }
 
   private toIngestResponse(itemId: string, dedupeStatus: IngestResponse['dedupe_status'], analysis: Analysis): IngestResponse {
-    const item = this.db.prepare('SELECT id, title, source_uri, content_hash FROM items WHERE id = ?').get(itemId) as {
+    const item = this.db.prepare('SELECT id, title, source_uri, content_hash, truncated, author, publisher, published_at FROM items WHERE id = ?').get(itemId) as {
       id: string;
       title: string | null;
       source_uri: string | null;
       content_hash: string;
+      truncated: number;
+      author: string | null;
+      publisher: string | null;
+      published_at: string | null;
     };
     return {
       item_id: item.id,
@@ -250,6 +280,10 @@ export class ItemStore {
       title: item.title,
       source_uri: item.source_uri,
       content_hash: item.content_hash,
+      truncated: Boolean(item.truncated),
+      author: item.author,
+      publisher: item.publisher,
+      published_at: item.published_at,
       summary: analysis.summary,
       core_claims: analysis.claims,
       tags: analysis.tags,
@@ -264,10 +298,11 @@ export class ItemStore {
 
   private latestAnalysis(itemId: string): Analysis {
     const row = this.db.prepare(`
-      SELECT summary, claims_json, relevance_json, recommended_action, confidence, model, analysis_version
-      FROM analyses WHERE item_id = ? ORDER BY created_at DESC LIMIT 1
+      SELECT summary, reason, claims_json, relevance_json, recommended_action, confidence, model, analysis_version
+      FROM analyses WHERE item_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1
     `).get(itemId) as {
       summary: string;
+      reason: string | null;
       claims_json: string;
       relevance_json: string;
       recommended_action: Analysis['recommended_action'];
@@ -277,18 +312,18 @@ export class ItemStore {
     };
     const tags = this.db.prepare('SELECT tag, reason, confidence FROM tags WHERE item_id = ? ORDER BY confidence DESC').all(itemId) as Analysis['tags'];
     const relationships = this.db.prepare(`
-      SELECT from_item_id, to_item_id, relation_type, explanation, confidence
+      SELECT from_item_id, to_item_id, relation_type, explanation, confidence, origin, evidence_json
       FROM relationships WHERE from_item_id = ? OR to_item_id = ?
-    `).all(itemId, itemId) as Analysis['relationships'];
+    `).all(itemId, itemId) as Array<Omit<Analysis['relationships'][number], 'evidence'> & { evidence_json: string | null }>;
     return {
       summary: row.summary,
       claims: JSON.parse(row.claims_json),
       relevance: JSON.parse(row.relevance_json),
       recommended_action: row.recommended_action,
       confidence: row.confidence,
-      reason: tags.length ? `Matched themes: ${tags.map((tag) => tag.tag).join(', ')}` : 'Stored for recall; no strong theme match.',
+      reason: row.reason ?? 'Original analysis rationale was not recorded for this legacy item.',
       tags,
-      relationships,
+      relationships: relationships.map(({ evidence_json, ...relationship }) => ({ ...relationship, ...(evidence_json ? { evidence: JSON.parse(evidence_json) } : {}) })),
       model: row.model,
       analysis_version: row.analysis_version
     };
@@ -337,13 +372,13 @@ export class ItemStore {
   }
 
   private relatedItems(itemId: string, title: string | null, analysis: Analysis): RelatedItem[] {
-    const terms = searchableTerms([
+    const terms = toFtsQuery(extractSearchTerms([
       title,
       analysis.summary,
       ...analysis.claims,
       ...analysis.relevance.themes,
       ...analysis.tags.map((tag) => tag.tag)
-    ]);
+    ], 10));
     if (!terms) return [];
 
     const rows = this.db.prepare(`
@@ -383,38 +418,16 @@ function isStaleAnalysis(ingestedAt: string, now: string) {
   return Date.parse(now) - Date.parse(ingestedAt) > LIMITS.maxSyncResponseSeconds * 1000;
 }
 
-function normalizeIngestReplay(snapshot: IngestResponse): IngestResponse {
+function normalizeIngestReplay(db: Database, snapshot: IngestResponse): IngestResponse {
+  const item = db.prepare('SELECT truncated, author, publisher, published_at FROM items WHERE id = ?')
+    .get(snapshot.item_id) as { truncated: number; author: string | null; publisher: string | null; published_at: string | null } | undefined;
   return {
     ...snapshot,
     dedupe_status: 'idempotent_replay',
+    truncated: Object.hasOwn(snapshot, 'truncated') ? snapshot.truncated : Boolean(item?.truncated),
+    author: Object.hasOwn(snapshot, 'author') ? snapshot.author : item?.author ?? null,
+    publisher: Object.hasOwn(snapshot, 'publisher') ? snapshot.publisher : item?.publisher ?? null,
+    published_at: Object.hasOwn(snapshot, 'published_at') ? snapshot.published_at : item?.published_at ?? null,
     related_items: Array.isArray(snapshot.related_items) ? snapshot.related_items : []
   };
 }
-
-function searchableTerms(values: Array<string | null | undefined>) {
-  const seen = new Set<string>();
-  for (const value of values) {
-    for (const term of String(value ?? '').toLowerCase().match(/[\p{L}\p{N}][\p{L}\p{N}-]{2,}/gu) ?? []) {
-      if (STOP_WORDS.has(term)) continue;
-      seen.add(term);
-      if (seen.size >= 10) break;
-    }
-    if (seen.size >= 10) break;
-  }
-  return [...seen].map((term) => `"${term}"`).join(' OR ');
-}
-
-const STOP_WORDS = new Set([
-  'and',
-  'are',
-  'but',
-  'for',
-  'from',
-  'has',
-  'into',
-  'not',
-  'that',
-  'the',
-  'this',
-  'with'
-]);

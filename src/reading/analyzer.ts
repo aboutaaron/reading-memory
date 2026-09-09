@@ -46,7 +46,7 @@ export function findRelationships(db: Database, itemId: string, themes: string[]
     SELECT DISTINCT i.id AS item_id, i.title AS title, group_concat(t.tag) AS tags
     FROM items i
     JOIN tags t ON t.item_id = i.id
-    WHERE i.id <> ? AND t.tag IN (${themes.map(() => '?').join(',')})
+    WHERE i.id <> ? AND i.status = 'indexed' AND t.tag IN (${themes.map(() => '?').join(',')})
     GROUP BY i.id
     ORDER BY i.ingested_at DESC
     LIMIT 10
@@ -55,17 +55,24 @@ export function findRelationships(db: Database, itemId: string, themes: string[]
   return rows.slice(0, LIMITS.relationshipsPerItem).map((row) => canonicalRelationship(itemId, row.item_id, {
     relation_type: 'same_theme',
     explanation: `Shares reading themes: ${row.tags}`,
-    confidence: LIMITS.relationshipMinConfidence
+    confidence: 0.5,
+    origin: 'heuristic'
   }));
 }
 
 export function canonicalRelationship(
   a: string,
   b: string,
-  data: { relation_type: string; explanation: string; confidence: number }
+  data: Omit<Relationship, 'from_item_id' | 'to_item_id'>
 ): Relationship {
   if (data.relation_type === 'same_theme' && a.localeCompare(b) > 0) {
-    return { from_item_id: b, to_item_id: a, ...data };
+    return {
+      from_item_id: b, to_item_id: a, ...data,
+      ...(data.evidence ? { evidence: {
+        source_quote: data.evidence.target_quote,
+        target_quote: data.evidence.source_quote
+      } } : {})
+    };
   }
   return { from_item_id: a, to_item_id: b, ...data };
 }

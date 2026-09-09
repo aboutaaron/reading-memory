@@ -4,6 +4,7 @@ import { transaction } from '../db/connection.js';
 import { ApiError } from '../api/errors.js';
 import type { BriefEventsRequest } from '../api/contracts.js';
 import { sha256, stableJson } from '../ingest/content-hash.js';
+import { assertNoInFlightIngest } from './item-store.js';
 
 export type BriefEventRecord = {
   id: string;
@@ -45,6 +46,7 @@ export class BriefEventStore {
     payloadHash: string;
     body: BriefEventsRequest;
   }): BriefEventsResponse {
+    assertNoInFlightIngest(this.db, input.principal, input.requestId);
     const now = new Date().toISOString();
     return transaction(this.db, () => {
       this.deleteExpiredIdempotency(now);

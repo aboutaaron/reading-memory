@@ -5,6 +5,8 @@ export type Relationship = {
   relation_type: string;
   explanation: string;
   confidence: number;
+  origin?: 'model' | 'heuristic';
+  evidence?: { source_quote: string; target_quote: string };
 };
 export type RelatedItem = {
   item_id: string;
@@ -33,6 +35,9 @@ export type ExtractedSource = {
   finalUrl: string | null;
   title: string | null;
   extractedText: string;
+  author?: string | null;
+  publisher?: string | null;
+  publishedAt?: string | null;
   truncated: boolean;
   contentHash: string;
   rawBytesHash: string | null;

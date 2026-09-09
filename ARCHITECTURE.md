@@ -48,6 +48,12 @@ Flue owns the model-judgment boundary:
 
 SQLite is the durable store for canonical corpus records and validated structured analysis. Flue's per-analysis conversation is opaque and ephemeral. The service stores operational data outside the git checkout, under `~/.reading-api` by default.
 
+Reader annotations are append-only, attributed statements associated with an item. A correction points at its predecessor; only the active correction is indexed and supplied as current reader context, while item detail retains the history. User statements and agent interpretations have separate actor types. This is attribution supplied by the authenticated local caller, not independent identity verification.
+
+Before analysis, deterministic lexical retrieval supplies bounded prior-source passages and active annotations. Accepted model relationships refer only to those supplied IDs and contain exact quotes from the current source and a supplied prior passage. This checks provenance; semantic entailment remains model judgment. Heuristic theme relationships are labeled separately.
+
+The HTTP ingest delegates extraction lazily to the store after request replay/conflict checks. In-flight identical requests share extraction and analysis. Content-hash dedupe follows extraction and uses the complete normalized content, even when the stored analysis projection is truncated.
+
 ## Security Model
 
 The service binds to `127.0.0.1` by default and is designed for local agent use, not public internet exposure.

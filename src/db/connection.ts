@@ -70,21 +70,27 @@ export function migrate(db: Database) {
 export function reconcileFts(db: Database) {
   db.exec('BEGIN IMMEDIATE');
   try {
-    db.prepare('DELETE FROM item_fts').run();
-    db.prepare(`
-      INSERT INTO item_fts (item_id, title, body, summary, tags)
-      SELECT i.id, coalesce(i.title, ''), i.extracted_text, coalesce(a.summary, ''), coalesce(group_concat(t.tag, ' '), '')
-      FROM items i
-      LEFT JOIN analyses a ON a.item_id = i.id
-      LEFT JOIN tags t ON t.item_id = i.id
-      WHERE i.status = 'indexed'
-      GROUP BY i.id
-    `).run();
+    rebuildItemFts(db);
     db.exec('COMMIT');
   } catch (error) {
     db.exec('ROLLBACK');
     throw error;
   }
+}
+
+/** Caller owns the transaction. Rebuilds derived search data, including active reader notes. */
+export function rebuildItemFts(db: Database, itemId?: string) {
+  db.prepare('DELETE FROM item_fts WHERE (? IS NULL OR item_id = ?)').run(itemId ?? null, itemId ?? null);
+  db.prepare(`
+    INSERT INTO item_fts (item_id, title, body, summary, tags, reader_notes)
+    SELECT i.id, coalesce(i.title, ''), i.extracted_text,
+      coalesce((SELECT summary FROM analyses WHERE item_id = i.id ORDER BY created_at DESC, rowid DESC LIMIT 1), ''),
+      coalesce((SELECT group_concat(tag, ' ') FROM tags WHERE item_id = i.id), ''),
+      coalesce((SELECT group_concat(note || ' ' || coalesce(project, '') || ' ' || coalesce(question, ''), ' ')
+        FROM reader_annotations r WHERE r.item_id = i.id
+          AND NOT EXISTS (SELECT 1 FROM reader_annotations newer WHERE newer.supersedes_annotation_id = r.id)), '')
+    FROM items i WHERE i.status = 'indexed' AND (? IS NULL OR i.id = ?)
+  `).run(itemId ?? null, itemId ?? null);
 }
 
 function assertEmptyV0Database(db: Database) {
@@ -97,7 +103,8 @@ function assertEmptyV0Database(db: Database) {
     'sessions',
     'activity_log',
     'item_fts',
-    'brief_events'
+    'brief_events',
+    'reader_annotations'
   ];
   const placeholders = appTables.map(() => '?').join(',');
   const rows = db.prepare(`

@@ -142,6 +142,16 @@ Supported source types: `url`, `text`, `pdf_url`. URL and PDF ingestion require 
 
 `POST /brief-events` is idempotent by `request_id` and guarded against equivalent duplicate events for the same item/date/kind/source context.
 
+### Operational activity
+
+Use authenticated `GET /activity` to inspect recent operational history, such as ingestion outcomes and annotation creation, while debugging. Reading recall and evidence retrieval belong to `POST /query`; activity events are operational metadata, not semantic search results.
+
+```bash
+curl -s -H "Authorization: Bearer $READING_API_TOKEN" http://127.0.0.1:4727/activity | jq
+```
+
+The standard response envelope contains a `data` array of up to 50 events ordered by `created_at` descending. Each event exposes `id`, `type`, `principal`, `request_id`, `item_id`, `metadata_json`, and `created_at`. `principal` identifies the authenticated token by its fingerprint, and `metadata_json` is a JSON-encoded string of event-specific metadata. The endpoint has no pagination or filtering controls and is not a complete HTTP request log.
+
 ### Reader annotations
 
 `POST /items/:id/annotations` uses bearer authentication and a separate allowance of 30 annotation writes per minute. These writes do not consume the 10-per-minute ingestion allowance, and ingestion does not consume annotation capacity. `/capabilities.rate_limits.annotation_per_minute` exposes this limit. Use a fresh UUID for each operation and reuse it only for the same retry:

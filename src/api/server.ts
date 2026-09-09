@@ -1,6 +1,7 @@
 import { createEmbeddingProvider } from '../reading/embedding-provider.js';
 import { embedAnalysis, embeddingHealth, vectorNeighbors, type Embedder } from '../reading/embeddings.js';
 import { queryHybridCorpus } from '../reading/hybrid-query.js';
+import { queryGraphCorpus } from '../reading/graph-query.js';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { existsSync, readdirSync, statfsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -102,12 +103,13 @@ export function createReadingApi(
         limiter.check(principal, 'query');
         const body = v.parse(QueryRequestSchema, await readRequestBody());
         const queryInput: Parameters<typeof queryCorpus>[1] = { query: body.query };
-        if (body.mode !== undefined && body.mode !== 'hybrid') queryInput.mode = body.mode;
+        if (body.mode === 'fts' || body.mode === 'fts+usage') queryInput.mode = body.mode;
         if (body.lexical_policy !== undefined) queryInput.lexical_policy = body.lexical_policy;
         if (body.top_k !== undefined) queryInput.topK = body.top_k;
         if (body.filters?.since !== undefined) queryInput.since = body.filters.since;
         if (body.filters?.tags !== undefined) queryInput.tags = body.filters.tags;
-        const data = body.mode === 'hybrid' ? await queryHybridCorpus(db, queryInput, embedder) : queryCorpus(db, queryInput);
+        const data = body.mode === 'hybrid+graph' ? await queryGraphCorpus(db, queryInput, embedder)
+          : body.mode === 'hybrid' ? await queryHybridCorpus(db, queryInput, embedder) : queryCorpus(db, queryInput);
         return send(res, 200, { ok: true, request_id: body.request_id, data, error: null });
       }
 
@@ -291,7 +293,9 @@ function setSecurityHeaders(res: ServerResponse) {
 function capabilities() {
   return {
     supported_ingest_types: ['url', 'text', 'pdf_url'],
-    query_modes: ['fts', 'fts+usage', 'hybrid'],
+    query_modes: ['fts', 'fts+usage', 'hybrid', 'hybrid+graph'],
+    graph_retrieval: { hops: 1, max_seeds: 3, max_added_results: 2, edge_scan_limit_per_seed: 100,
+      relationship_origin: 'model', evidence: 'exact quotes in current sources; relationship meaning remains unverified' },
     lexical_policies: ['any', 'all'],
     supports_brief_events: true,
     brief_event_kinds: ['included', 'skipped', 'resurfaced', 'cited'],

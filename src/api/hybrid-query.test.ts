@@ -108,6 +108,39 @@ test('HTTP lexical policy controls partial matches in FTS, usage mode and hybrid
   assert.deepEqual((await request('/capabilities')).json.data.lexical_policies, ['any', 'all']);
 });
 
+test('HTTP graph mode returns quoted relationship context and preserves strict lexical fallback', async t => {
+  const { db, request } = await fixture(t, null);
+  const source = 'Quartz clocks drift during winter.';
+  const target = 'Temperature compensation corrects oscillator error.';
+  const capture = async (text: string) => (await request('/ingest', {
+    request_id: randomUUID(), source_type: 'text', source: { text }
+  })).json.data.item_id as string;
+  const seedId = await capture(source);
+  const peerId = await capture(target);
+  db.prepare(`INSERT INTO relationships (id, from_item_id, to_item_id, relation_type,
+    explanation, confidence, created_at, origin, evidence_json)
+    VALUES ('graph-api-edge', ?, ?, 'extends', 'Proposes a compensation mechanism.', 0.8, ?, 'model', ?)`)
+    .run(seedId, peerId, new Date().toISOString(), JSON.stringify({ source_quote: source, target_quote: target }));
+  const query = { request_id: randomUUID(), query: 'quartz', mode: 'hybrid+graph', lexical_policy: 'all', top_k: 5 };
+  const result = await request('/query', query);
+  assert.equal(result.status, 200);
+  assert.equal(result.json.data.requested_mode, 'hybrid+graph');
+  assert.equal(result.json.data.retrieval_mode, 'fts+graph');
+  assert.equal(result.json.data.base_retrieval_mode, 'fts');
+  assert.equal(result.json.data.fallback_reason, 'embeddings_unavailable');
+  assert.deepEqual(result.json.data.citations, [seedId, peerId]);
+  const peer = result.json.data.results[1];
+  assert.equal(peer.retrieval_origin, 'graph');
+  assert.equal(peer.graph.origin, 'model');
+  assert.equal(peer.graph.seed_item_id, seedId);
+  assert.equal(peer.graph.relationship_verification, 'unverified');
+  assert.deepEqual(peer.graph.evidence, { source_quote: source, target_quote: target });
+  const weak = await request('/query', { ...query, request_id: randomUUID(), query: 'quartz lunar' });
+  assert.deepEqual(weak.json.data.results, []);
+  assert.equal((await request('/capabilities')).json.data.graph_retrieval.hops, 1);
+  assert.equal((await request('/query', { ...query, mode: 'fts+graph' })).status, 400, 'actual fallback mode is not a request mode');
+});
+
 test('embedding SDK uses the shared provider configuration and concrete model with fixed dimensions', async t => {
   const seen: any[] = [];
   const server = createServer(async (req, res) => {
@@ -172,7 +205,7 @@ test('hybrid availability preserves explicit fts+usage mode without embedding qu
   assert.equal(result.json.data.retrieval_mode, 'fts+usage');
   assert.deepEqual(result.json.data.citations, [ingest.json.data.item_id]);
   assert.equal(calls, before);
-  assert.deepEqual((await request('/capabilities')).json.data.query_modes, ['fts', 'fts+usage', 'hybrid']);
+  assert.deepEqual((await request('/capabilities')).json.data.query_modes, ['fts', 'fts+usage', 'hybrid', 'hybrid+graph']);
 });
 
 

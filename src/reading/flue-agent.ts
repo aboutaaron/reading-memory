@@ -17,6 +17,8 @@ export type ReadingAnalyzerInput = {
   priorItemIds?: string[];
   title: string | null;
   text: string;
+  /** True when extraction or a prior capture already omitted source text. */
+  sourceTextTruncated?: boolean;
   readerContext?: CallerReadingContext;
   sessionId?: string;
   /** Absolute request deadline in milliseconds; optional work leaves time to save analysis. */
@@ -46,13 +48,14 @@ export function createFlueReadingAnalyzer(db: Database, options: {
   fetch?: typeof fetch;
 }): ReadingAnalyzer {
   const traces = new FlueTraceLogger(options.tracePath);
-  return async ({ itemId, title, text, readerContext, priorItemIds, sessionId, signal }) => {
+  return async ({ itemId, title, text, sourceTextTruncated, readerContext, priorItemIds, sessionId, signal }) => {
     const trace = traces.createTrace({ itemId, sessionId: sessionId ?? `analysis:${itemId}`, title, text, model: options.model });
     try {
       signal?.throwIfAborted();
       const model = resolveProviderModel(options.model, options.env);
       const readingContext = buildReadingContext(db, { itemId, title, text, ...(priorItemIds ? { priorItemIds } : {}), ...(readerContext ? { readerContext } : {}) });
-      const providerInput = prepareProviderAnalysisInput({ item_id: itemId, title, text, ...readingContext });
+      const providerInput = prepareProviderAnalysisInput({ item_id: itemId, title, text,
+        source_text_truncated: sourceTextTruncated === true, ...readingContext });
       const result = await requestReadingAnalysis(model, providerInput, {
         ...(signal ? { signal } : {}), ...(options.fetch ? { fetch: options.fetch } : {}),
         onResponse: trace.onResponse

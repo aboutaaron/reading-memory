@@ -109,3 +109,40 @@ test('reanalysis API uses stored source and reader context, validates input and 
   assert.equal(db.prepare('SELECT count(*) AS n FROM analyses').get()?.n, 2);
   assert.equal((await request('POST', '/items/missing/reanalyze', { request_id: randomUUID() })).status, 404);
 });
+
+for (const truncated of [true, false]) test(`ingest and reanalysis send stored truncation=${truncated} to the actual provider payload`, async t => {
+  const { createFlueReadingAnalyzer } = await import('../reading/flue-agent.js');
+  const { extractSource } = await import('../reading/extract-source.js');
+  let analyze!: import('../reading/flue-agent.js').ReadingAnalyzer;
+  const observed: Array<{ source_text_truncated: boolean; source_passages: Array<{ text: string }> }> = [];
+  let extractionCalls = 0;
+  const { db, request } = await fixture(t, {
+    embedder: null,
+    extractor: async input => {
+      extractionCalls++;
+      // Models an extractor that already bounded the capture before analysis.
+      return { ...await extractSource(input), truncated };
+    },
+    analyzer: input => analyze(input)
+  });
+  analyze = createFlueReadingAnalyzer(db, { model: 'openai/synthetic', env: { OPENAI_API_KEY: 'synthetic-key' },
+    fetch: async (_url, options) => {
+      observed.push(JSON.parse(JSON.parse(String(options?.body)).input));
+      const value = { summary: 'A bounded source.', claims: [], relevance: { score: 0.5, themes: [] },
+        recommended_action: 'save', confidence: 0.5, reason: 'Synthetic test.', tags: [], relationships: [] };
+      return Response.json({ id: 'response-test', object: 'response', created_at: 1, status: 'completed', model: 'synthetic',
+        output: [{ id: 'message-test', type: 'message', role: 'assistant', status: 'completed',
+          content: [{ type: 'output_text', text: JSON.stringify(value), annotations: [] }] }],
+        usage: { input_tokens: 20, output_tokens: 10, total_tokens: 30 } });
+    } });
+  const text = 'This source was already bounded before analysis.';
+  const captured = await request('POST', '/ingest', { request_id: randomUUID(), source_type: 'text', source: { text } });
+  assert.equal(captured.status, 200);
+  const itemId = captured.payload.data.item_id;
+  assert.equal(db.prepare('SELECT truncated FROM items WHERE id = ?').get(itemId)?.truncated, truncated ? 1 : 0);
+  const reanalyzed = await request('POST', `/items/${itemId}/reanalyze`, { request_id: randomUUID() });
+  assert.equal(reanalyzed.status, 200);
+  assert.equal(extractionCalls, 1);
+  assert.deepEqual(observed.map(input => input.source_text_truncated), [truncated, truncated]);
+  assert.ok(observed.every(input => input.source_passages.map(passage => passage.text).join('') === text));
+});

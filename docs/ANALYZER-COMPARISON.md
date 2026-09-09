@@ -8,6 +8,8 @@ On a disposable consistent snapshot, select a representative cohort across topic
 
 For each case, freeze the exact current text/title, reader context, and prior items/passages returned by `buildReadingContext` on the snapshot. Reuse that frozen context across models; do not reretrieve prior items per arm or let one model's result alter another case. The manifest must contain at most 100,000 current source characters, five prior items, three passages of at most 800 characters per prior item, and the normal annotation limits. The input file is limited to 5 MiB. Use opaque local case/item IDs and keep all private text out of GitHub. An input manifest necessarily contains reading material that will be sent to both selected providers when applied.
 
+Preserve the stored or extracted source's truncation status as `input.source_text_truncated`. A short retained excerpt may still come from a truncated article; do not infer completeness from its current character count. The optional boolean is accepted for compatibility with old manifests, but new manifests should include the actual status so both models receive the same warning as the live analyzer. If an older manifest omitted that status, record the limitation when comparing its results with a new run.
+
 Set `expected_edges` before requests to the target IDs and relation types justified by the passages actually supplied. `[]` means a labelled case with no justified edge; `null` means unlabelled. Do not require an edge that needs an omitted passage. List all acceptable target/type pairs under a consistent rubric and note that the live normalizer keeps at most three edges. Expected target IDs must occur in `prior_items`. Optional `source_families` maps supplied item IDs to frozen family IDs, making duplicates visible during review and enabling family-coverage counts; it does not alter the model's input or edge-level score.
 
 Example synthetic manifest (do not confuse synthetic success with real-world quality):
@@ -22,6 +24,7 @@ Example synthetic manifest (do not confuse synthetic success with real-world qua
       "item_id": "current",
       "title": "Controlled queue trial",
       "text": "The controlled trial found that queues reduced failures.",
+      "source_text_truncated": false,
       "reader_context": { "source_context": null, "ingest_reason": null, "annotations": [] },
       "prior_items": [{
         "item_id": "prior",

@@ -22,6 +22,7 @@ const comparisonCase = z.object({
   case_id: id,
   cohort: z.enum(['representative', 'held_out', 'repair', 'synthetic']),
   input: z.object({ item_id: id, title: z.string().max(1000).nullable(), text: z.string().min(1).max(100_000),
+    source_text_truncated: z.boolean().optional(),
     reader_context: z.object({ source_context: z.string().max(1000).nullable(), ingest_reason: z.string().max(1000).nullable(),
       annotations: z.array(annotation).max(3) }).strict(), prior_items: z.array(prior).max(5) }).strict(),
   // Labels are frozen before requests. Empty means a labelled no-edge case; null means unlabelled.
@@ -71,7 +72,11 @@ export async function compareAnalyzers(manifest: ComparisonManifest, options: Co
   if (!Number.isInteger(options.timeoutMs) || options.timeoutMs < 1000 || options.timeoutMs > 55_000) {
     throw new Error('Timeout must be between 1000 and 55000 milliseconds.');
   }
-  const prepared = validated.cases.map(item => prepareProviderAnalysisInput(item.input));
+  const prepared = validated.cases.map(item => {
+    const { source_text_truncated, ...input } = item.input;
+    return prepareProviderAnalysisInput({ ...input,
+      ...(source_text_truncated === undefined ? {} : { source_text_truncated }) });
+  });
   const base = { version: 1, analysis_version: READING_ANALYSIS_VERSION,
     instructions_sha256: sha256Json(READING_ANALYSIS_INSTRUCTIONS), schema_sha256: sha256Json(readingAnalysisJsonSchema),
     manifest_sha256: sha256Json(validated),

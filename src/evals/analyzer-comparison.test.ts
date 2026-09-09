@@ -32,6 +32,18 @@ test('default dry run requires no credentials and never invokes the provider', a
   assert.equal(result.input_sha256.length, 1);
 });
 
+test('frozen comparison preserves the retained-source truncation flag in both model inputs', async () => {
+  const manifest = fixture();
+  manifest.cases[0]!.input.source_text_truncated = true;
+  const inputs: unknown[] = [];
+  await compareAnalyzers(manifest, { models, apply: true, timeoutMs: 1000, env: { OPENAI_API_KEY: 'key' },
+    request: async (_model, input) => { inputs.push(structuredClone(input)); return output(); } });
+  assert.equal(inputs.length, 2);
+  assert.deepEqual(inputs[0], inputs[1]);
+  assert.equal((inputs[0] as { source_text_truncated: boolean }).source_text_truncated, true);
+  assert.equal(ComparisonManifestSchema.safeParse(fixture()).success, true);
+});
+
 test('paired replay shares prepared input, counts rejected references, and separates label agreement', async () => {
   const inputs: unknown[] = [];
   const result = await compareAnalyzers(fixture(), { models, apply: true, timeoutMs: 1000,

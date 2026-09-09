@@ -8,6 +8,8 @@ export type RawProviderAnalysisInput = {
   item_id: string;
   title: string | null;
   text: string;
+  /** Extraction or stored-source truncation, before this payload builder runs. */
+  source_text_truncated?: boolean;
   reader_context: ReturnType<typeof buildReadingContext>['reader_context'];
   prior_items: PriorReadingItem[];
 };
@@ -32,7 +34,7 @@ export function prepareProviderAnalysisInput(input: RawProviderAnalysisInput): P
     title: input.title,
     reader_context: structuredClone(input.reader_context),
     source_passages: splitPassages(text).map((passage, index) => ({ passage_id: `current:${index + 1}`, text: passage })),
-    source_text_truncated: text.length !== input.text.length,
+    source_text_truncated: input.source_text_truncated === true || text.length !== input.text.length,
     prior_items: priorItems.map((item, index) => ({
       ...structuredClone(item),
       source_passages: item.source_passages.slice(0, READING_CONTEXT_LIMITS.sourcePassages)

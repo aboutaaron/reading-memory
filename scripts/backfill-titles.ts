@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { loadConfig } from '../src/config.js';
-import { rebuildItemFts, transaction, type Database } from '../src/db/connection.js';
+import { configureDatabase, rebuildItemFts, transaction, type Database } from '../src/db/connection.js';
 import { CURRENT_USER_VERSION } from '../src/db/migrations.js';
 import { cleanMetadata } from '../src/ingest/extract-html.js';
 
@@ -60,6 +60,18 @@ export function backfillTitles(db: Database, apply = false) {
   };
 }
 
+/** Dry runs stay read-only; writes use the service's timeout and FK settings. */
+export function openTitleMaintenanceDatabase(dbPath: string, apply = false): Database {
+  const db = new DatabaseSync(dbPath, { readOnly: !apply });
+  try {
+    if (apply) configureDatabase(db);
+    return db;
+  } catch (error) {
+    db.close();
+    throw error;
+  }
+}
+
 function main() {
   const args = process.argv.slice(2);
   if (args.includes('--help')) {
@@ -76,7 +88,7 @@ function main() {
   }
   // Opening an existing database directly avoids migrations and FTS writes in
   // dry-run mode. No sources are fetched or analyzed by this maintenance task.
-  const db = new DatabaseSync(dbPath, { readOnly: !apply });
+  const db = openTitleMaintenanceDatabase(dbPath, apply);
   try { console.log(JSON.stringify(backfillTitles(db, apply), null, 2)); }
   finally { db.close(); }
 }

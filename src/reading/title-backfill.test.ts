@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { backfillTitles, inferStoredHeading } from '../../scripts/backfill-titles.js';
-import { openMemoryDatabase } from '../db/connection.js';
+import { backfillTitles, inferStoredHeading, openTitleMaintenanceDatabase } from '../../scripts/backfill-titles.js';
+import { openDatabase, openMemoryDatabase } from '../db/connection.js';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 test('infers only explicit stored heading syntax and skips ambiguous text', () => {
   assert.equal(inferStoredHeading('# Durable Reading\n\nEvidence below.'), 'Durable Reading');
@@ -40,4 +43,23 @@ test('title maintenance is read-only by default and applies inferred provenance 
     assert.equal((db.prepare('SELECT title FROM items WHERE id = ?').get('titled') as { title: string }).title, 'Explicit title');
     assert.equal(backfillTitles(db, true).applied, 0);
   } finally { db.close(); }
+});
+
+test('maintenance apply waits for database locks while dry run remains read-only', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'reading-title-maintenance-'));
+  const path = join(dir, 'reading.sqlite');
+  try {
+    openDatabase(path).close();
+    const preview = openTitleMaintenanceDatabase(path);
+    try {
+      assert.throws(() => preview.exec('CREATE TABLE should_not_exist (id INTEGER)'), /readonly/i);
+      assert.equal(backfillTitles(preview).mode, 'dry-run');
+    } finally { preview.close(); }
+    const writer = openTitleMaintenanceDatabase(path, true);
+    try {
+      assert.equal(writer.prepare('PRAGMA busy_timeout').get()?.timeout, 5000);
+      assert.equal(writer.prepare('PRAGMA foreign_keys').get()?.foreign_keys, 1);
+      assert.equal(writer.prepare('PRAGMA journal_mode').get()?.journal_mode, 'wal');
+    } finally { writer.close(); }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

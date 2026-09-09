@@ -14,8 +14,7 @@ export const LIMITS = {
   minDiskFreeBytes: 1 * 1024 * 1024 * 1024,
   warnDiskFreeBytes: 15 * 1024 * 1024 * 1024,
   staleBackupSeconds: 25 * 60 * 60,
-  relationshipsPerItem: 3,
-  relationshipMinConfidence: 0.7
+  relationshipsPerItem: 3
 } as const;
 
 export type AppConfig = {

@@ -148,7 +148,7 @@ function assertAnnotation(body: AnnotationRequest) {
   if (body.project !== undefined) assertText('project', body.project, 200);
   if (body.question !== undefined) assertText('question', body.question, 1000);
   if (body.supersedes_annotation_id !== undefined) {
-    assertText('supersedes_annotation_id', body.supersedes_annotation_id, 200);
+    assertText('supersedes_annotation_id', body.supersedes_annotation_id, 100);
   }
 }
 

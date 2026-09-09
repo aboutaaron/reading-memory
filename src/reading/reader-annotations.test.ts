@@ -183,7 +183,8 @@ test('defensive validation rejects blank fields and limits without trimming acce
   const invalid: Partial<AnnotationRequest>[] = [
     { note: ' \n\t ' }, { actor: ' ' }, { project: ' ' }, { question: '\n' },
     { note: 'a'.repeat(4001) }, { actor: 'a'.repeat(121) },
-    { project: 'a'.repeat(201) }, { question: 'a'.repeat(1001) }
+    { project: 'a'.repeat(201) }, { question: 'a'.repeat(1001) },
+    { supersedes_annotation_id: 'a'.repeat(101) }
   ];
   for (const [index, changes] of invalid.entries()) {
     assert.throws(() => store.record(input(`req-invalid-${index}`, changes)), expectError(400, 'BAD_REQUEST'));

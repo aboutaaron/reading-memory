@@ -10,12 +10,13 @@ permissions:
 
 jobs:
   test:
-    name: test (Node ${{ matrix.node }})
+    name: test (Node ${{ matrix.node }}, umask ${{ matrix.umask }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        node: ['22', '24']
+        node: ['22', '24', '26']
+        umask: ['022', '077']
     steps:
       - uses: actions/checkout@v4
 
@@ -31,4 +32,6 @@ jobs:
         run: npm run build
 
       - name: Run tests
-        run: npm test
+        run: |
+          umask ${{ matrix.umask }}
+          npm test

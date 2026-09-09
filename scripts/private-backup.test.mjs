@@ -75,6 +75,9 @@ test('corrupt restore rolls back to the private integrity-checked safety snapsho
 test('backup and restore reject symlink and hard-linked paths without changing unrelated files', (t) => {
   const { root, live, db } = fixture(t); db.close();
   const elsewhere = join(root, 'elsewhere'); writeFileSync(elsewhere, 'untouched', { mode: 0o644 });
+  // Establish the permissive target regardless of the caller's umask: this
+  // assertion must still catch an accidental chmod through either alias.
+  chmodSync(elsewhere, 0o644);
   const backups = join(root, 'backups'); mkdirSync(backups);
   const output = join(backups, 'reading.sqlite'); symlinkSync(elsewhere, output);
   assert.throws(() => backupDatabase(live, output), /already exists/);

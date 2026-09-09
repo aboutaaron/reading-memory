@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { ReadingHttpClient } from './http-client.js';
+import { isLoaderDeprecationWarning } from '../test-support/runtime-warnings.js';
 
 const run = promisify(execFile);
 const token = 'mcp-tls-fixture-secret-at-least-thirty-two-bytes';
@@ -60,7 +61,9 @@ async function trustedRequest(url: string, certPath: string) {
     env: { PATH: process.env.PATH ?? '', NODE_EXTRA_CA_CERTS: certPath },
     timeout: 10_000
   });
-  assert.equal(stderr, '');
+  assert.equal(stderr.includes(token), false, 'bearer auth must never reach stderr');
+  assert.equal(stderr.includes(certPath), false, 'test trust paths must never reach stderr');
+  assert.ok(stderr === '' || isLoaderDeprecationWarning(stderr), `Unexpected child stderr: ${stderr}`);
   return JSON.parse(stdout) as {
     result: Awaited<ReturnType<ReadingHttpClient['request']>>;
     systemLookups: number;

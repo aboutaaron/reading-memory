@@ -142,6 +142,16 @@ Supported source types: `url`, `text`, `pdf_url`. URL and PDF ingestion require 
 
 `POST /brief-events` is idempotent by `request_id` and guarded against equivalent duplicate events for the same item/date/kind/source context.
 
+### Operational activity
+
+Use authenticated `GET /activity` to inspect recent operational history, such as ingestion outcomes and annotation creation, while debugging. Reading recall and evidence retrieval belong to `POST /query`; activity events are operational metadata, not semantic search results.
+
+```bash
+curl -s -H "Authorization: Bearer $READING_API_TOKEN" http://127.0.0.1:4727/activity | jq
+```
+
+The standard response envelope contains a `data` array of up to 50 events ordered by `created_at` descending. Each event exposes `id`, `type`, `principal`, `request_id`, `item_id`, `metadata_json`, and `created_at`. `principal` identifies the authenticated token by its fingerprint, and `metadata_json` is a JSON-encoded string of event-specific metadata. The endpoint has no pagination or filtering controls and is not a complete HTTP request log.
+
 ### Reader annotations
 
 `POST /items/:id/annotations` uses bearer authentication and a separate allowance of 30 annotation writes per minute. These writes do not consume the 10-per-minute ingestion allowance, and ingestion does not consume annotation capacity. `/capabilities.rate_limits.annotation_per_minute` exposes this limit. Use a fresh UUID for each operation and reuse it only for the same retry:
@@ -193,6 +203,10 @@ systemctl --user status reading-memory.service
 ```
 
 The unit binds to loopback and stores data outside the git checkout at `~/.reading-api/reading.sqlite`.
+
+Before storing real reading material on each deployment, verify the host itself: confirm deny-by-default firewall rules with required SSH access retained, at least 15 GB of free disk space, an authenticated localhost smoke request, and a listener restricted to `127.0.0.1`. Run a backup and restore drill on disposable data and check file ownership and permissions. Repository tests do not certify a host's firewall, storage or service installation.
+
+Choose operational retention explicitly: backups retain 30 days by default; configure journald limits for service logs and rotate local JSONL traces according to the host's retention policy. Keep logs and traces private. Probe `/health` from a local monitor and alert when `ready` is false or disk/backup warnings appear. To rotate the bearer token, update the private environment file, restart the service, and update the local caller's secret; never put the token in logs or issue reports.
 
 ## Backup And Restore
 

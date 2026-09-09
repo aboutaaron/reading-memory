@@ -57,6 +57,7 @@ The env var name is derived from the resolved provider: hyphens become underscor
 | Record what a digest or brief used or skipped | `POST /brief-events` |
 | Preserve a reader's comment, question, or correction about a source | `POST /items/:id/annotations` |
 | Resume a multi-step reading workflow after interruption | run ledger files + `npm run run-ledger` |
+| Inspect recent operational events while debugging | authenticated `GET /activity` |
 | Inspect model judgment and failures | local SQLite + Flue traces |
 
 The calling agent owns the user interaction. Reading Memory is the durable subsystem it calls when current context is not enough.
@@ -207,3 +208,5 @@ Use this when the question is not "can my agent read this?" but "can my agent re
 ## Development
 
 For manual wiring, API examples, local development, deployment, backups, validation, and trace inspection, see [DEVELOPMENT.md](DEVELOPMENT.md).
+
+Track planned work in [GitHub issues](https://github.com/aboutaaron/reading-memory/issues). The [historical backlog audit](docs/backlog-migration.md) records what shipped and where remaining work moved.

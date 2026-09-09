@@ -1,15 +1,15 @@
-import * as v from 'valibot';
 import type { Database } from '../db/connection.js';
 import { ApiError } from '../api/errors.js';
 import type { Analysis, Relationship } from './types.js';
 import { canonicalRelationship, findRelationships } from './analyzer.js';
 import { FlueTraceLogger } from './flue-trace.js';
 import { buildReadingContext, type CallerReadingContext, type PriorReadingItem } from './reading-context.js';
-import { ReadingAnalysisSchema, type ReadingAnalysis } from './analysis-schema.js';
+import { type ReadingAnalysis } from './analysis-schema.js';
 import { requestReadingAnalysis } from './provider-analysis.js';
+import { prepareProviderAnalysisInput, resolveProviderAnalysisOutput } from './passage-evidence.js';
 import { DEFAULT_READING_MODEL, resolveProviderModel } from './provider-model.js';
 
-export const READING_ANALYSIS_VERSION = 'reading-api-sdk-v3';
+export const READING_ANALYSIS_VERSION = 'reading-api-sdk-v4-passage-evidence';
 export const MODEL_RELATION_TYPES = ['supports', 'contradicts', 'extends', 'duplicates_angle', 'related', 'updates'] as const;
 
 export type ReadingAnalyzerInput = {
@@ -17,6 +17,8 @@ export type ReadingAnalyzerInput = {
   priorItemIds?: string[];
   title: string | null;
   text: string;
+  /** True when extraction or a prior capture already omitted source text. */
+  sourceTextTruncated?: boolean;
   readerContext?: CallerReadingContext;
   sessionId?: string;
   /** Absolute request deadline in milliseconds; optional work leaves time to save analysis. */
@@ -46,17 +48,19 @@ export function createFlueReadingAnalyzer(db: Database, options: {
   fetch?: typeof fetch;
 }): ReadingAnalyzer {
   const traces = new FlueTraceLogger(options.tracePath);
-  return async ({ itemId, title, text, readerContext, priorItemIds, sessionId, signal }) => {
+  return async ({ itemId, title, text, sourceTextTruncated, readerContext, priorItemIds, sessionId, signal }) => {
     const trace = traces.createTrace({ itemId, sessionId: sessionId ?? `analysis:${itemId}`, title, text, model: options.model });
     try {
       signal?.throwIfAborted();
       const model = resolveProviderModel(options.model, options.env);
       const readingContext = buildReadingContext(db, { itemId, title, text, ...(priorItemIds ? { priorItemIds } : {}), ...(readerContext ? { readerContext } : {}) });
-      const result = await requestReadingAnalysis(model, { item_id: itemId, title, text, ...readingContext }, {
+      const providerInput = prepareProviderAnalysisInput({ item_id: itemId, title, text,
+        source_text_truncated: sourceTextTruncated === true, ...readingContext });
+      const result = await requestReadingAnalysis(model, providerInput, {
         ...(signal ? { signal } : {}), ...(options.fetch ? { fetch: options.fetch } : {}),
         onResponse: trace.onResponse
       });
-      const parsed = v.parse(ReadingAnalysisSchema, result);
+      const parsed = resolveProviderAnalysisOutput(result, providerInput);
       const analysis = normalizeAnalysis(db, itemId, parsed, `${model.provider}/${model.id}`, { text, priorItems: readingContext.prior_items });
       await trace.success(analysis);
       return analysis;
@@ -87,12 +91,12 @@ export function normalizeAnalysis(db: Database, itemId: string, result: ReadingA
   for (const relationship of result.relationships) {
     const target = suppliedItems.get(relationship.to_item_id);
     const relationType = relationship.relation_type.trim();
-    const sourceQuote = relationship.evidence?.source_quote.trim() ?? '';
-    const targetQuote = relationship.evidence?.target_quote.trim() ?? '';
+    const sourceQuote = relationship.evidence?.source_quote ?? '';
+    const targetQuote = relationship.evidence?.target_quote ?? '';
     // Existence is insufficient: the model can only cite the exact passages it saw.
     if (relationship.from_item_id !== itemId || relationship.to_item_id === itemId || !target
       || !(MODEL_RELATION_TYPES as readonly string[]).includes(relationType)
-      || !sourceQuote || !targetQuote || sourceQuote.length > 1500 || targetQuote.length > 1500
+      || !sourceQuote.trim() || !targetQuote.trim() || sourceQuote.length > 1500 || targetQuote.length > 1500
       || !evidenceContext.text.includes(sourceQuote)
       || !target.source_passages.some((passage) => passage.includes(targetQuote))) continue;
     const key = `${relationship.to_item_id}:${relationType}`;

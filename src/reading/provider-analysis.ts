@@ -2,10 +2,11 @@ import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
 import { readingAnalysisJsonSchema } from './analysis-schema.js';
 import { READING_ANALYSIS_INSTRUCTIONS } from './analysis-prompt.js';
+import type { ProviderAnalysisInput } from './passage-evidence.js';
 import type { ProviderModel } from './provider-model.js';
 import type { ProviderResponseMetadata } from './flue-trace.js';
 
-export async function requestReadingAnalysis(model: ProviderModel, input: unknown, options: {
+export async function requestReadingAnalysis(model: ProviderModel, input: ProviderAnalysisInput, options: {
   signal?: AbortSignal;
   fetch?: typeof fetch;
   onResponse: (metadata: ProviderResponseMetadata) => void;

@@ -64,7 +64,8 @@ test('OpenAI SDK sends one strict structured request and persists no conversatio
       ['from_item_id', 'to_item_id', 'relation_type', 'explanation', 'confidence', 'evidence']);
     assert.match(body.instructions, /untrusted data/);
     assert.equal(body.tools, undefined);
-    assert.equal(JSON.parse(body.input).text, input.text);
+    assert.equal(JSON.parse(body.input).source_passages.map((passage: { text: string }) => passage.text).join(''), input.text);
+    assert.equal(JSON.parse(body.input).text, undefined);
     return openaiResponse(validResult);
   };
   try {
@@ -293,7 +294,9 @@ test('SDK receives prior source passages and attributed reader context before mo
   let providerInput = '';
   const transport: typeof fetch = async (_url, options) => {
     providerInput = String(options?.body);
-    return openaiResponse(evidenceResult);
+    return openaiResponse({ ...evidenceResult, relationships: evidenceResult.relationships.map(relationship => ({
+      ...relationship, evidence: { source_passage_id: 'current:1', target_passage_id: 'prior:1:1' }
+    })) });
   };
   try {
     const analyze = createFlueReadingAnalyzer(db, { model: 'gpt-5.6-luna', env: testEnv, fetch: transport });

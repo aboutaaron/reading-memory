@@ -2,7 +2,7 @@
 
 This file covers manual wiring, local development, API examples, deployment, backups, validation, and trace inspection.
 
-For the service boundary, security model, storage shape, and Flue integration rationale, see [ARCHITECTURE.md](ARCHITECTURE.md).
+For the service boundary, security model, storage shape, and analyzer integration rationale, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Manual Agent Wiring
 
@@ -106,8 +106,9 @@ READING_API_TOKEN=dev-secret READING_API_DB=/tmp/reading.sqlite npm run dev
 - `READING_API_DATA_DIR`: defaults to `~/.reading-api`.
 - `READING_API_DB`: defaults to `~/.reading-api/reading.sqlite`.
 - `READING_API_BACKUP_DIR`: defaults to `~/backups/reading-memory`.
-- `READING_API_FLUE_MODEL`: provider/model selected through Flue; defaults to `openai/gpt-5.6-luna`.
-- `READING_API_FLUE_TRACE_PATH`: defaults to `<READING_API_DATA_DIR>/flue-events.jsonl`; set to `off` to disable local Flue event tracing.
+- `READING_API_MODEL`: concrete OpenAI ID or `openai/<id>` / `anthropic/<id>`; defaults to `gpt-5.6-luna`. `READING_API_FLUE_MODEL` remains a lower-priority compatibility alias.
+- `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`: required for the selected provider. `OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL` override the SDK base URL. Only OpenAI and Anthropic are supported.
+- `READING_API_FLUE_TRACE_PATH`: defaults to `<READING_API_DATA_DIR>/flue-events.jsonl`; set to `off` to disable local analysis tracing.
 
 Production secret file:
 
@@ -285,9 +286,9 @@ systemctl --user start reading-memory.service
 
 Migration failure behavior: migrations run inside a transaction and use `PRAGMA user_version`. If migration fails, startup fails before serving traffic and leaves the prior DB state intact.
 
-## Inspect Flue Activity
+## Inspect Analysis Activity
 
-Flue analysis traces are local JSONL files. They record item/session ids, timing, Flue event types, title/text lengths and hashes, tool metadata, and final structured reading judgment metadata. They do not store bearer tokens, raw titles, or raw article/newsletter text by default.
+Analysis traces are local JSONL files. They record item/session ids, timing, provider name, token counts, title/text lengths and hashes, and numeric judgment metadata. They do not store credentials, raw titles, source text, model output, or model-generated theme strings. The legacy trace filename is retained so existing installations and inspection commands keep working.
 
 ```bash
 cd reading-memory
@@ -301,4 +302,4 @@ The deployed default path is:
 ~/.reading-api/flue-events.jsonl
 ```
 
-Reading Memory does not persist full Flue transcripts. The runtime's per-analysis conversation is opaque and ephemeral; use the redacted JSONL trace for operational debugging. Schema v4 omits the unused `sessions` table in new databases and removes it on upgrade only when empty. Nonempty legacy tables and their rows are preserved; the current analyzer does not read or write them.
+Reading Memory sends one bounded structured request through an official provider SDK. SDK retries are disabled, cancellation reaches the provider, incomplete/refused/invalid outputs fail analysis, and no conversation state is stored. Schema v4 omits the unused `sessions` table in new databases and removes it on upgrade only when empty. Nonempty legacy tables and their rows are preserved; the current analyzer does not read or write them. Analyzer health checks local credentials and provider configuration without network calls; valid configuration is not proof of live provider access.

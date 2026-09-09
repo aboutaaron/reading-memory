@@ -11,7 +11,7 @@ test('derives dataDir from explicit READING_API_DB when data dir is unset', () =
   assert.equal(config.dbPath, '/tmp/reading-api-smoke.sqlite');
   assert.equal(config.dataDir, '/tmp');
   assert.equal(config.flueTracePath, '/tmp/flue-events.jsonl');
-  assert.equal(config.flueModel, 'openai/gpt-5.6-luna');
+  assert.equal(config.flueModel, 'gpt-5.6-luna');
 });
 
 test('keeps model selection provider-configurable', () => {
@@ -33,7 +33,7 @@ test('rejects non-loopback bind hosts', () => {
   );
 });
 
-test('allows disabling local Flue trace logging', () => {
+test('allows disabling local analysis trace logging', () => {
   const config = loadConfig({
     READING_API_DATA_DIR: '/tmp/reading-api',
     READING_API_TOKEN: 'secret',
@@ -58,4 +58,8 @@ test('honors READING_API_BACKUP_DIR override', () => {
   } as NodeJS.ProcessEnv);
 
   assert.equal(config.backupDir, '/var/lib/reading-backups');
+});
+
+test('READING_API_MODEL takes precedence over the legacy model setting', () => {
+  assert.equal(loadConfig({ READING_API_MODEL: 'gpt-5.6-terra', READING_API_FLUE_MODEL: 'gpt-5.6-luna' }).flueModel, 'gpt-5.6-terra');
 });

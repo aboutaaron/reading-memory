@@ -35,7 +35,7 @@ export function createReadingApi(
   const analyzer = options.analyzer ?? createFlueReadingAnalyzer(db, { model: config.flueModel, tracePath: config.flueTracePath });
   const analyzerHealth = options.analyzerHealth ?? (options.analyzer
     ? () => ({ status: 'ok' as const, warn: false })
-    : flueAnalyzerHealth);
+    : () => flueAnalyzerHealth(config.flueModel));
 
   return createServer(async (req, res) => {
     let requestId = req.headers['x-request-id']?.toString() ?? null;

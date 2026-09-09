@@ -3,337 +3,208 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { fauxAssistantMessage, fauxToolCall, registerFauxProvider } from '@earendil-works/pi-ai/compat';
-import { resolveModel } from '@flue/runtime/internal';
 import { openMemoryDatabase } from '../db/connection.js';
-import { createFlueReadingAnalyzer, flueAnalyzerHealth, normalizeAnalysis, wrapResolveModelWithBaseUrlOverrides } from './flue-agent.js';
+import { createFlueReadingAnalyzer, flueAnalyzerHealth, normalizeAnalysis, READING_ANALYSIS_VERSION } from './flue-agent.js';
+import { DEFAULT_READING_MODEL, resolveProviderModel } from './provider-model.js';
 import type { PriorReadingItem } from './reading-context.js';
 
-test('flueAnalyzerHealth reports the packaged analyze-item skill as ready', () => {
-  assert.deepEqual(flueAnalyzerHealth(), { status: 'ok', warn: false });
+const testEnv = { OPENAI_API_KEY: 'test-openai-key', ANTHROPIC_API_KEY: 'test-anthropic-key' };
+const validResult = {
+  summary: 'Durable reading memory lets local agents recall important material.',
+  claims: ['Local agents need durable reading memory.'],
+  relevance: { score: 0.86, themes: ['agent-memory'] }, recommended_action: 'brief', confidence: 0.82,
+  reason: 'Directly relevant to durable agent memory.', tags: [{ tag: 'agent-memory', reason: 'Core topic', confidence: 0.84 }],
+  relationships: []
+};
+const input = { itemId: 'item_test', title: 'Durable memory', text: 'Local agents need durable reading memory and reliable citations.' };
+
+function openaiResponse(value: unknown, overrides: Record<string, unknown> = {}) {
+  return Response.json({ id: 'response-test', object: 'response', created_at: 1, status: 'completed', model: 'gpt-5.6-luna',
+    output: [{ id: 'message-test', type: 'message', role: 'assistant', status: 'completed',
+      content: [{ type: 'output_text', text: JSON.stringify(value), annotations: [] }] }],
+    usage: { input_tokens: 100, output_tokens: 80, total_tokens: 180 }, ...overrides });
+}
+
+test('analysis health fails closed on missing key, unsupported provider, malformed ID, or invalid base URL', () => {
+  assert.deepEqual(flueAnalyzerHealth(DEFAULT_READING_MODEL, testEnv), { status: 'ok', warn: false });
+  for (const [model, env] of [
+    [DEFAULT_READING_MODEL, {}], ['unknown/test', testEnv], ['openai/', testEnv], ['gpt 5', testEnv],
+    [DEFAULT_READING_MODEL, { ...testEnv, OPENAI_BASE_URL: 'file:///tmp' }],
+    [DEFAULT_READING_MODEL, { ...testEnv, OPENAI_BASE_URL: 'https://user:secret@provider.test' }]
+  ] as const) assert.deepEqual(flueAnalyzerHealth(model, env), { status: 'unavailable', warn: true });
 });
 
-test('wrapResolveModelWithBaseUrlOverrides passes through when no env override is set', () => {
-  const original = { id: 'claude-sonnet-4-5', provider: 'anthropic', baseUrl: 'https://api.anthropic.com' };
-  const wrapped = wrapResolveModelWithBaseUrlOverrides(() => original as never);
-  delete process.env.ANTHROPIC_BASE_URL;
-  const result = wrapped('anthropic/claude-sonnet-4-5') as { baseUrl: string };
-  assert.equal(result.baseUrl, 'https://api.anthropic.com');
+test('concrete default and legacy prefix resolve without a framework alias table', () => {
+  const bare = resolveProviderModel(DEFAULT_READING_MODEL, testEnv);
+  assert.deepEqual(bare, resolveProviderModel(`openai/${DEFAULT_READING_MODEL}`, testEnv));
+  assert.equal(bare.id, 'gpt-5.6-luna');
+  assert.equal(bare.baseUrl, 'https://api.openai.com/v1');
 });
 
-test('wrapResolveModelWithBaseUrlOverrides applies <PROVIDER>_BASE_URL env override', () => {
-  const original = { id: 'claude-sonnet-4-5', provider: 'anthropic', baseUrl: 'https://api.anthropic.com' };
-  const wrapped = wrapResolveModelWithBaseUrlOverrides(() => original as never);
-  process.env.ANTHROPIC_BASE_URL = 'http://proxy.test:9123';
-  try {
-    const result = wrapped('anthropic/claude-sonnet-4-5') as { baseUrl: string; provider: string };
-    assert.equal(result.baseUrl, 'http://proxy.test:9123');
-    assert.equal(result.provider, 'anthropic');
-    // Original object is unchanged (functional override).
-    assert.equal(original.baseUrl, 'https://api.anthropic.com');
-  } finally {
-    delete process.env.ANTHROPIC_BASE_URL;
-  }
-});
-
-test('wrapResolveModelWithBaseUrlOverrides only overrides the matching provider', () => {
-  const openai = { id: 'gpt-test', provider: 'openai', baseUrl: 'https://api.openai.com' };
-  const wrapped = wrapResolveModelWithBaseUrlOverrides(() => openai as never);
-  process.env.ANTHROPIC_BASE_URL = 'http://anthropic-proxy.test:9123';
-  try {
-    const result = wrapped('openai/gpt-test') as { baseUrl: string };
-    assert.equal(result.baseUrl, 'https://api.openai.com');
-  } finally {
-    delete process.env.ANTHROPIC_BASE_URL;
-  }
-});
-
-test('wrapResolveModelWithBaseUrlOverrides translates hyphenated provider names to env keys', () => {
-  const cf = { id: 'sonnet-via-cf', provider: 'cloudflare-ai-gateway', baseUrl: 'https://gateway.ai.cloudflare.com/...' };
-  const wrapped = wrapResolveModelWithBaseUrlOverrides(() => cf as never);
-  process.env.CLOUDFLARE_AI_GATEWAY_BASE_URL = 'http://cf-proxy.test:9123';
-  try {
-    const result = wrapped('cloudflare-ai-gateway/sonnet-via-cf') as { baseUrl: string };
-    assert.equal(result.baseUrl, 'http://cf-proxy.test:9123');
-  } finally {
-    delete process.env.CLOUDFLARE_AI_GATEWAY_BASE_URL;
-  }
-});
-
-test('production resolver resolves the OpenAI Luna default through the standard Responses API', () => {
-  const wrapped = wrapResolveModelWithBaseUrlOverrides(resolveModel);
-  const result = wrapped('openai/gpt-5.6-luna') as {
-    id: string;
-    provider: string;
-    api: string;
-    baseUrl: string;
-  };
-
-  assert.equal(result.id, 'gpt-5.6-luna');
-  assert.equal(result.provider, 'openai');
-  assert.equal(result.api, 'openai-responses');
-  assert.equal(result.baseUrl, 'https://api.openai.com/v1');
-});
-
-test('production resolver remains provider-agnostic for another registered provider', () => {
-  const wrapped = wrapResolveModelWithBaseUrlOverrides(resolveModel);
-  const result = wrapped('anthropic/claude-sonnet-4-5') as {
-    id: string;
-    provider: string;
-    api: string;
-  };
-
-  assert.equal(result.id, 'claude-sonnet-4-5');
-  assert.equal(result.provider, 'anthropic');
-  assert.equal(result.api, 'anthropic-messages');
-});
-
-test('Flue analyzer loads the packaged analyze-item skill without persisting opaque session state', async () => {
-  const db = openMemoryDatabase();
-  const faux = registerFauxProvider();
-  const flueResult = {
-    summary: 'Durable reading memory lets local agents recall important material.',
-    claims: ['Local agents need durable reading memory.'],
-    relevance: { score: 0.86, themes: ['agent-memory'] },
-    recommended_action: 'brief',
-    confidence: 0.82,
-      reason: 'Directly relevant to durable agent memory.',
-      tags: [{ tag: 'agent-memory', reason: 'Core topic', confidence: 0.84 }],
-      relationships: [{
-        from_item_id: 'item_test',
-        to_item_id: 'item_hallucinated',
-        relation_type: 'same_theme',
-        explanation: 'Fake relationship from model output',
-        confidence: 0.8
-      }]
-  };
-  faux.setResponses([
-    fauxAssistantMessage(fauxToolCall('finish', flueResult), { stopReason: 'toolUse' })
-  ]);
-
-  try {
-    const analyze = createFlueReadingAnalyzer(db, {
-      model: 'faux/faux-1',
-      resolveModel: () => faux.getModel()
-    });
-    const result = await analyze({
-      itemId: 'item_test',
-      title: 'Durable memory',
-      text: 'Local agents need durable reading memory and reliable citations.'
-    });
-
-    assert.equal(result.analysis_version, 'reading-api-flue-v2');
-    assert.equal(result.model, 'faux/faux-1');
-    assert.equal(result.recommended_action, 'brief');
-    assert.deepEqual(result.relevance.themes, ['agent-memory']);
-    assert.deepEqual(result.relationships, []);
-    assert.equal(faux.state.callCount, 1);
-
-    assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name = 'sessions'").get(), undefined);
-  } finally {
-    faux.unregister();
-  }
-});
-
-test('Flue analyzer writes redacted local traces', async () => {
-  const db = openMemoryDatabase();
-  const tmp = await mkdtemp(join(tmpdir(), 'reading-api-traces-'));
-  const tracePath = join(tmp, 'flue-events.jsonl');
-  const faux = registerFauxProvider();
-  const flueResult = {
-    summary: 'Trace logging records useful output without raw source text.',
-    claims: ['Trace logs are useful.'],
-    relevance: { score: 0.75, themes: ['observability'] },
-    recommended_action: 'save',
-    confidence: 0.8,
-    reason: 'Useful for inspecting Flue behavior.',
-    tags: [{ tag: 'observability', reason: 'Core topic', confidence: 0.88 }],
-    relationships: []
-  };
-  faux.setResponses([
-    fauxAssistantMessage(fauxToolCall('finish', flueResult), { stopReason: 'toolUse' })
-  ]);
-
-  try {
-    const analyze = createFlueReadingAnalyzer(db, {
-      model: 'faux/faux-1',
-      tracePath,
-      resolveModel: () => faux.getModel()
-    });
-    await analyze({
-      itemId: 'item_trace',
-      title: 'Trace me',
-      text: 'PRIVATE SOURCE TEXT SHOULD NOT APPEAR IN TRACE EVENTS.',
-      sessionId: 'analysis:item_trace:trace-request'
-    });
-
-    const lines = (await readFile(tracePath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
-    assert.equal(lines[0].event, 'analysis_start');
-    assert.equal(lines[0].title_chars, 8);
-    assert.match(lines[0].title_sha256, /^sha256:/);
-    assert.equal(lines[0].text_chars, 54);
-    assert.match(lines[0].text_sha256, /^sha256:/);
-    assert.equal(lines.at(-1).event, 'analysis_success');
-    assert.equal(lines.at(-1).recommended_action, 'save');
-    assert(!JSON.stringify(lines).includes('Trace me'));
-    assert(!JSON.stringify(lines).includes('PRIVATE SOURCE TEXT'));
-  } finally {
-    faux.unregister();
-    await rm(tmp, { recursive: true, force: true });
-  }
-});
-
-test('Flue trace write failures do not fail analysis', async () => {
-  const db = openMemoryDatabase();
-  const tmp = await mkdtemp(join(tmpdir(), 'reading-api-bad-traces-'));
-  const blocker = join(tmp, 'not-a-directory');
-  await writeFile(blocker, 'blocker');
-  const faux = registerFauxProvider();
-  const flueResult = {
-    summary: 'Analysis succeeds even when trace writing fails.',
-    claims: ['Tracing must be best-effort.'],
-    relevance: { score: 0.7, themes: ['reliability'] },
-    recommended_action: 'save',
-    confidence: 0.83,
-    reason: 'Observability should not break ingest.',
-    tags: [{ tag: 'reliability', reason: 'Core topic', confidence: 0.9 }],
-    relationships: []
-  };
-  faux.setResponses([
-    fauxAssistantMessage(fauxToolCall('finish', flueResult), { stopReason: 'toolUse' })
-  ]);
-
-  try {
-    const analyze = createFlueReadingAnalyzer(db, {
-      model: 'faux/faux-1',
-      tracePath: join(blocker, 'flue-events.jsonl'),
-      resolveModel: () => faux.getModel()
-    });
-    const result = await analyze({
-      itemId: 'item_bad_trace',
-      title: 'Bad trace path',
-      text: 'Analysis should still complete.'
-    });
-
-    assert.equal(result.recommended_action, 'save');
-    assert.equal(result.analysis_version, 'reading-api-flue-v2');
-  } finally {
-    faux.unregister();
-    await rm(tmp, { recursive: true, force: true });
-  }
-});
-
-test('Flue trace analysis errors do not persist raw model output', async () => {
-  const db = openMemoryDatabase();
-  const tmp = await mkdtemp(join(tmpdir(), 'reading-api-error-traces-'));
-  const tracePath = join(tmp, 'flue-events.jsonl');
-  const faux = registerFauxProvider();
-  faux.setResponses([
-    fauxAssistantMessage(fauxToolCall('finish', { summary: 'PRIVATE MODEL ECHO SHOULD NOT BE LOGGED' }), { stopReason: 'toolUse' })
-  ]);
-
-  try {
-    const analyze = createFlueReadingAnalyzer(db, {
-      model: 'faux/faux-1',
-      tracePath,
-      resolveModel: () => faux.getModel()
-    });
-    await assert.rejects(
-      () => analyze({
-        itemId: 'item_error_trace',
-        title: 'Error trace',
-        text: 'PRIVATE SOURCE TEXT SHOULD ALSO NOT BE LOGGED.'
-      }),
-      /Flue reading analysis failed/
-    );
-
-    const trace = await readFile(tracePath, 'utf8');
-    assert(!trace.includes('PRIVATE MODEL ECHO'));
-    assert(!trace.includes('PRIVATE SOURCE TEXT'));
-    assert(!trace.includes('Error trace'));
-    assert.match(trace, /"event":"analysis_error"/);
-    assert.match(trace, /"error_message_sha256":"sha256:/);
-  } finally {
-    faux.unregister();
-    await rm(tmp, { recursive: true, force: true });
-  }
-});
-
-test('Flue analyzer rejects promptly when the abort signal is already aborted', async () => {
-  const db = openMemoryDatabase();
-  const faux = registerFauxProvider();
-  faux.setResponses([
-    fauxAssistantMessage(fauxToolCall('finish', { summary: 'should never be reached' }), { stopReason: 'toolUse' })
-  ]);
-
-  try {
-    const analyze = createFlueReadingAnalyzer(db, {
-      model: 'faux/faux-1',
-      resolveModel: () => faux.getModel()
-    });
-    const controller = new AbortController();
-    controller.abort();
-
-    await assert.rejects(
-      () => analyze({
-        itemId: 'item_aborted',
-        title: 'Aborted before start',
-        text: 'This analysis should be cancelled before the model is called.',
-        signal: controller.signal
-      }),
-      /Flue reading analysis failed/
-    );
-    assert.equal(faux.state.callCount, 0);
-  } finally {
-    faux.unregister();
-  }
-});
-
-test('Flue analyzer propagates an abort after the provider request starts', async () => {
-  const db = openMemoryDatabase();
-  const faux = registerFauxProvider();
-  let providerStarted!: () => void;
-  const started = new Promise<void>((resolve) => {
-    providerStarted = resolve;
+test('provider-specific base URL overrides preserve the matching credentials', () => {
+  const env = { ...testEnv, OPENAI_BASE_URL: 'http://openai.test/v1', ANTHROPIC_BASE_URL: 'http://anthropic.test' };
+  assert.deepEqual(resolveProviderModel('anthropic/claude-sonnet-4-5', env), {
+    provider: 'anthropic', id: 'claude-sonnet-4-5', baseUrl: 'http://anthropic.test', apiKey: testEnv.ANTHROPIC_API_KEY
   });
-  faux.setResponses([
-    async (_context, options) => {
-      providerStarted();
-      await new Promise<never>((_resolve, reject) => {
-        const signal = options?.signal;
-        if (!signal) {
-          reject(new Error('Expected an AbortSignal at the provider boundary.'));
-          return;
-        }
-        const abort = () => reject(signal.reason ?? new Error('Request was aborted'));
-        if (signal.aborted) abort();
-        else signal.addEventListener('abort', abort, { once: true });
-      });
-      throw new Error('Provider request unexpectedly continued after abort.');
-    }
-  ]);
+  assert.equal(resolveProviderModel(DEFAULT_READING_MODEL, env).baseUrl, 'http://openai.test/v1');
+});
 
+test('OpenAI SDK sends one strict structured request and persists no conversation state', async () => {
+  const db = openMemoryDatabase(); let calls = 0;
+  const transport: typeof fetch = async (url, options) => {
+    calls++;
+    assert.equal(String(url), 'http://proxy.test/v1/responses');
+    assert.equal(new Headers(options?.headers).get('authorization'), 'Bearer test-openai-key');
+    const body = JSON.parse(String(options?.body));
+    assert.equal(body.model, 'gpt-5.6-luna');
+    assert.equal(body.store, false);
+    assert.equal(body.text.format.strict, true);
+    assert.equal(body.text.format.schema.additionalProperties, false);
+    assert.deepEqual(body.text.format.schema.properties.relationships.items.required,
+      ['from_item_id', 'to_item_id', 'relation_type', 'explanation', 'confidence', 'evidence']);
+    assert.match(body.instructions, /untrusted data/);
+    assert.equal(body.tools, undefined);
+    assert.equal(JSON.parse(body.input).text, input.text);
+    return openaiResponse(validResult);
+  };
   try {
-    const analyze = createFlueReadingAnalyzer(db, {
-      model: 'faux/faux-1',
-      resolveModel: () => faux.getModel()
-    });
-    const controller = new AbortController();
-    const analysis = analyze({
-      itemId: 'item_aborted_in_flight',
-      title: 'Abort in flight',
-      text: 'This analysis should be cancelled after the provider call begins.',
-      signal: controller.signal
-    });
+    const analyze = createFlueReadingAnalyzer(db, { model: DEFAULT_READING_MODEL,
+      env: { ...testEnv, OPENAI_BASE_URL: 'http://proxy.test/v1' }, fetch: transport });
+    const result = await analyze(input);
+    assert.equal(result.analysis_version, READING_ANALYSIS_VERSION);
+    assert.equal(result.model, 'openai/gpt-5.6-luna');
+    assert.equal(result.recommended_action, 'brief');
+    assert.equal(calls, 1);
+    assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name = 'sessions'").get(), undefined);
+  } finally { db.close(); }
+});
 
-    await started;
-    controller.abort(new Error('request deadline exceeded'));
+test('Anthropic SDK uses one forced output tool through the selected proxy', async () => {
+  const db = openMemoryDatabase(); let calls = 0;
+  const transport: typeof fetch = async (url, options) => {
+    calls++;
+    assert.equal(String(url), 'http://anthropic.test/v1/messages');
+    assert.equal(new Headers(options?.headers).get('x-api-key'), 'test-anthropic-key');
+    const body = JSON.parse(String(options?.body));
+    assert.equal(body.model, 'claude-sonnet-4-5');
+    assert.deepEqual(body.tool_choice, { type: 'tool', name: 'reading_analysis', disable_parallel_tool_use: true });
+    assert.equal(body.tools.length, 1);
+    assert.equal(body.tools[0].input_schema.additionalProperties, false);
+    return Response.json({ id: 'msg-test', type: 'message', role: 'assistant', model: body.model,
+      stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'tool-test', name: 'reading_analysis', input: validResult }],
+      usage: { input_tokens: 100, output_tokens: 80 } });
+  };
+  try {
+    const result = await createFlueReadingAnalyzer(db, { model: 'anthropic/claude-sonnet-4-5',
+      env: { ...testEnv, ANTHROPIC_BASE_URL: 'http://anthropic.test' }, fetch: transport })(input);
+    assert.equal(result.model, 'anthropic/claude-sonnet-4-5'); assert.equal(calls, 1);
+  } finally { db.close(); }
+});
 
-    await assert.rejects(analysis, /Flue reading analysis failed/);
-    assert.equal(faux.state.callCount, 1);
-  } finally {
-    faux.unregister();
+test('invalid, refused, incomplete, empty, and HTTP error responses fail once without SDK retries', async () => {
+  const responses = [
+    () => openaiResponse({ summary: 'invalid' }),
+    () => openaiResponse(validResult, { status: 'incomplete' }),
+    () => openaiResponse(validResult, { output: [{ type: 'message', content: [{ type: 'refusal', refusal: 'No' }] }] }),
+    () => openaiResponse(validResult, { output: [] }),
+    () => Response.json({ error: { message: 'PRIVATE ERROR' } }, { status: 500 })
+  ];
+  for (const respond of responses) {
+    const db = openMemoryDatabase(); let calls = 0;
+    try {
+      const analyze = createFlueReadingAnalyzer(db, { model: DEFAULT_READING_MODEL, env: testEnv,
+        fetch: async () => { calls++; return respond(); } });
+      await assert.rejects(analyze(input), /Reading analysis failed/);
+      assert.equal(calls, 1);
+    } finally { db.close(); }
   }
+});
+
+test('Anthropic rejects truncated, missing, unexpected, duplicate, or invalid structured tool output', async () => {
+  const output = { type: 'tool_use', id: 'tool-test', name: 'reading_analysis', input: validResult };
+  const cases = [
+    { stop_reason: 'max_tokens', content: [output] },
+    { stop_reason: 'end_turn', content: [{ type: 'text', text: 'No analysis' }] },
+    { stop_reason: 'tool_use', content: [{ ...output, name: 'unexpected_tool' }] },
+    { stop_reason: 'tool_use', content: [output, output] },
+    { stop_reason: 'tool_use', content: [{ ...output, input: { summary: 'invalid' } }] }
+  ];
+  const db = openMemoryDatabase();
+  try {
+    for (const response of cases) {
+      let calls = 0;
+      const analyze = createFlueReadingAnalyzer(db, { model: 'anthropic/claude-sonnet-4-5', env: testEnv,
+        fetch: async () => { calls++; return Response.json({ id: 'msg-test', type: 'message', role: 'assistant',
+          model: 'claude-sonnet-4-5', usage: { input_tokens: 100, output_tokens: 80 }, ...response }); } });
+      await assert.rejects(analyze(input), /Reading analysis failed/);
+      assert.equal(calls, 1);
+    }
+  } finally { db.close(); }
+});
+
+test('missing credentials and unsupported providers fail before any provider request', async () => {
+  const db = openMemoryDatabase(); let calls = 0;
+  try {
+    for (const [model, env] of [[DEFAULT_READING_MODEL, {}], ['unknown/model', testEnv]] as const) {
+      const analyze = createFlueReadingAnalyzer(db, { model, env,
+        fetch: async () => { calls++; return openaiResponse(validResult); } });
+      await assert.rejects(analyze(input), /Reading analysis failed/);
+    }
+    assert.equal(calls, 0);
+  } finally { db.close(); }
+});
+
+test('analyzer rejects already-aborted calls before transport and propagates an in-flight abort', async () => {
+  const db = openMemoryDatabase(); let calls = 0;
+  let started!: () => void; const waiting = new Promise<void>((resolve) => { started = resolve; });
+  const analyze = createFlueReadingAnalyzer(db, { model: DEFAULT_READING_MODEL, env: testEnv,
+    fetch: async (_url, options) => {
+      calls++; started();
+      return new Promise<Response>((_resolve, reject) => {
+        const signal = options?.signal;
+        assert.ok(signal);
+        const abort = () => reject(signal.reason);
+        if (signal.aborted) abort(); else signal.addEventListener('abort', abort, { once: true });
+      });
+    } });
+  try {
+    const before = new AbortController(); before.abort();
+    await assert.rejects(analyze({ ...input, signal: before.signal }), /Reading analysis failed/);
+    assert.equal(calls, 0);
+    const active = new AbortController(); const result = analyze({ ...input, signal: active.signal });
+    await waiting; active.abort();
+    await assert.rejects(result, /Reading analysis failed/); assert.equal(calls, 1);
+  } finally { db.close(); }
+});
+
+test('trace records only safe metadata on success, validation failure, and provider error', async () => {
+  const db = openMemoryDatabase(); const tmp = await mkdtemp(join(tmpdir(), 'reading-api-traces-'));
+  const tracePath = join(tmp, 'flue-events.jsonl');
+  const privateText = 'PRIVATE SOURCE TEXT'; const privateTitle = 'PRIVATE TITLE'; const privateModelText = 'PRIVATE MODEL ECHO';
+  try {
+    const analyze = (fetch: typeof globalThis.fetch) => createFlueReadingAnalyzer(db, { model: DEFAULT_READING_MODEL,
+      env: testEnv, tracePath, fetch })({ ...input, title: privateTitle, text: privateText });
+    await analyze(async () => openaiResponse({ ...validResult, relevance: { score: 0.7, themes: [privateModelText] } }));
+    await assert.rejects(analyze(async () => openaiResponse({ summary: privateModelText })), /Reading analysis failed/);
+    await assert.rejects(analyze(async () => Response.json({ error: { message: privateText, code: privateModelText } }, { status: 500 })), /Reading analysis failed/);
+    const text = await readFile(tracePath, 'utf8');
+    for (const secret of [privateText, privateTitle, privateModelText, testEnv.OPENAI_API_KEY]) assert(!text.includes(secret));
+    const lines = text.trim().split('\n').map((line) => JSON.parse(line));
+    assert.equal(lines.filter((line) => line.event === 'analysis_start').length, 3);
+    assert.equal(lines.filter((line) => line.event === 'provider_response').length, 2);
+    assert.equal(lines.filter((line) => line.event === 'analysis_error').length, 2);
+    assert.match(text, /error_message_sha256/);
+  } finally { db.close(); await rm(tmp, { recursive: true, force: true }); }
+});
+
+test('trace write failures do not prevent a successful analysis', async () => {
+  const db = openMemoryDatabase(); const tmp = await mkdtemp(join(tmpdir(), 'reading-api-traces-'));
+  const blocker = join(tmp, 'blocker'); await writeFile(blocker, 'blocker');
+  try {
+    const analyze = createFlueReadingAnalyzer(db, { model: DEFAULT_READING_MODEL, env: testEnv,
+      tracePath: join(blocker, 'events.jsonl'), fetch: async () => openaiResponse(validResult) });
+    assert.equal((await analyze(input)).recommended_action, 'brief');
+  } finally { db.close(); await rm(tmp, { recursive: true, force: true }); }
 });
 
 const evidenceResult: Parameters<typeof normalizeAnalysis>[2] = {
@@ -411,7 +282,7 @@ test('invalid model relationships fall back to clearly labeled theme matches at 
   assert.equal(result.relationships[0]!.evidence, undefined);
 });
 
-test('Flue receives prior source passages and attributed reader context before model judgment', async () => {
+test('SDK receives prior source passages and attributed reader context before model judgment', async () => {
   const db = openMemoryDatabase();
   db.prepare(`INSERT INTO items (id, source_type, title, ingested_at, content_hash, status, extracted_text)
     VALUES ('prior', 'text', 'Cache reuse', '2026-09-01', 'prior', 'indexed', ?)`).run(evidencePrior.source_passages[0]!);
@@ -419,14 +290,13 @@ test('Flue receives prior source passages and attributed reader context before m
     .run('prior', 'Cache reuse', evidencePrior.source_passages[0]!, evidencePrior.summary, 'cache');
   db.prepare(`INSERT INTO reader_annotations (id, item_id, actor_type, actor, note, project, question, created_at)
     VALUES ('note', 'prior', 'user', 'Aaron', 'I am uncertain about staleness guarantees.', 'Analytics harness', 'When is reuse safe?', '2026-09-01')`).run();
-  const faux = registerFauxProvider();
   let providerInput = '';
-  faux.setResponses([async (context) => {
-    providerInput = JSON.stringify(context);
-    return fauxAssistantMessage(fauxToolCall('finish', evidenceResult), { stopReason: 'toolUse' });
-  }]);
+  const transport: typeof fetch = async (_url, options) => {
+    providerInput = String(options?.body);
+    return openaiResponse(evidenceResult);
+  };
   try {
-    const analyze = createFlueReadingAnalyzer(db, { model: 'faux/faux-1', resolveModel: () => faux.getModel() });
+    const analyze = createFlueReadingAnalyzer(db, { model: 'gpt-5.6-luna', env: testEnv, fetch: transport });
     const result = await analyze({
       itemId: 'current', title: 'Cache versions', text: 'Check the cache version before reuse.',
       readerContext: { source_context: 'user_shared_link', ingest_reason: 'Investigating cache invalidation.' }
@@ -440,6 +310,6 @@ test('Flue receives prior source passages and attributed reader context before m
     assert.equal(result.relationships[0]!.origin, 'model');
     assert.equal(result.relationships[0]!.to_item_id, 'prior');
   } finally {
-    faux.unregister();
+    db.close();
   }
 });

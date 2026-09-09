@@ -15,7 +15,7 @@ Agent calls Reading Memory over localhost HTTP
         |
 Reading Memory extracts, normalizes, dedupes, and stores the item
         |
-Flue analyzes the item with a structured skill
+A provider SDK returns structured reading judgment
         |
 SQLite stores canonical corpus facts and structured analysis
         |
@@ -39,14 +39,15 @@ The TypeScript service owns the reliability boundary:
 - query and brief-guide endpoints
 - backups, smoke tests, and `systemd` (Linux) / `launchd` (macOS) deployment
 
-Flue owns the model-judgment boundary:
+The analyzer owns the model-judgment boundary:
 
-- invoking the reading-analysis agent
-- applying the packaged `analyze-item` skill
-- producing structured reading output
-- emitting redacted trace events for local debugging
+- assembling bounded prior-source and attributed reader context
+- applying the packaged analysis prompt
+- making one structured SDK request
+- validating output and exact source evidence
+- emitting redacted trace metadata for local debugging
 
-SQLite is the durable store for canonical corpus records and validated structured analysis. Flue's per-analysis conversation is opaque and ephemeral. The service stores operational data outside the git checkout, under `~/.reading-api` by default.
+SQLite is the durable store for canonical corpus records and validated structured analysis. The analyzer does not persist provider conversations. The service stores operational data outside the git checkout, under `~/.reading-api` by default.
 
 Reader annotations are append-only, attributed statements associated with an item. A correction points at its predecessor; only the active correction is indexed and supplied as current reader context, while item detail retains the history. User statements and agent interpretations have separate actor types. This is attribution supplied by the authenticated local caller, not independent identity verification.
 
@@ -70,19 +71,25 @@ This protects against accidental or opportunistic access to private reading data
 
 Keep the service loopback-only unless you redesign authentication, transport security, logging, abuse controls, and operational monitoring for remote access.
 
-## Flue Integration
+## Analyzer Decision (Issue #21)
 
-Reading Memory uses [Flue](https://github.com/withastro/flue) as the framework for the model-judgment step.
+Decision: remove Flue and use the official OpenAI and Anthropic SDKs directly. The service needs a single structured completion, with no file access, command execution, tool loop, compaction, or conversation persistence. The direct implementation keeps the existing `ReadingAnalyzer` contract, normalization, evidence checks, bounded context, abort propagation, and best-effort redacted traces.
 
-The Flue agent lives in `src/reading/flue-reading-agent.ts`. It packages `analyze-item` with the agent definition, so required application behavior does not depend on workspace skill discovery. The runtime returns structured data that the TypeScript service validates and stores.
+The spike replaced `createFlueContext`, the disabled `SandboxApi` implementation, and a framework model resolver with a small provider adapter. OpenAI uses Responses with a strict JSON schema and `store: false`; Anthropic uses a forced output tool whose arguments are validated but never executed. A single Valibot schema supplies validation and the provider schema. Refusals, incomplete responses, missing output, malformed JSON, and invalid schemas fail analysis; SDK retries are disabled so the service owns the deadline and caller retry contract.
 
-The build still copies `.agents/` into `dist/` as a static artifact. The current runtime does not discover or execute that copy; `src/reading/flue-reading-agent.ts` is canonical.
+| Comparison | Flue baseline | Direct SDK decision |
+| --- | --- | --- |
+| Production packages in lockfile, including root | 298 | 34 |
+| All packages in lockfile, including root | 330 | 68 |
+| Analyzer, prompt, schema, provider, and trace source lines | 563 across 3 files | 455 across 6 files |
+| Runtime coupling | Beta runtime, internal resolver/context, agent/skill/harness lifecycle, sandbox | Public SDK request APIs and one schema converter |
+| Provider tests | Framework faux-provider registration and finish-tool emulation | Official SDK serialization with injected HTTP responses; no global registration |
+| Deterministic evaluation | 26/26 checks | 26/26 checks |
 
-The split is deliberate:
+The SDK route wins on dependency surface and test isolation. Line count includes the unchanged normalization and redacted error handling, plus explicit provider refusal checks and configuration validation. These tests use canned outputs and synthetic fixtures; they establish contract parity, not comparative live model quality, latency, or cost. No private corpus or live provider requests were used for this decision. Revisit an agent runtime only if a concrete workflow requires capabilities beyond a single bounded analysis request.
 
-- TypeScript handles service guarantees: contracts, auth, extraction, dedupe, persistence, validation, backups, and deployment.
-- Flue handles reading judgment: summary, claims, relevance, tags, recommended action, and relationships.
+The default is the concrete OpenAI provider ID `gpt-5.6-luna`, verified in the [official model reference](https://developers.openai.com/api/docs/models/gpt-5.6-luna). This is the same default model family as before; `openai/gpt-5.6-luna` remains accepted and resolves locally without a framework alias table. OpenAI's [structured-output documentation](https://developers.openai.com/api/docs/guides/structured-outputs) defines the strict schema contract. Anthropic's [tool definition documentation](https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools) defines the forced structured output call.
 
-Flue conversations are not persisted. Reading Memory writes redacted Flue activity to local JSONL traces for debugging; those traces are operational metadata by default, not raw article text or bearer tokens. A legacy `sessions` table remains in upgraded databases for backward compatibility, but the current analyzer does not read or write it.
+Compatibility: `READING_API_MODEL` takes precedence over legacy `READING_API_FLUE_MODEL`. The `flueModel` config property, `createFlueReadingAnalyzer` import, and `flue-events.jsonl` filename remain to avoid unnecessary consumer changes. Only OpenAI and Anthropic providers are supported; other former Flue providers require an API-compatible gateway or an explicit future adapter. Base URL overrides remain provider-specific. Analyzer health fails closed on missing credentials or invalid provider configuration, but does not make live network probes or claim a key has provider access.
 
-For commands to inspect traces, see [DEVELOPMENT.md](DEVELOPMENT.md#inspect-flue-activity).
+Legacy `sessions` tables may remain after upgrade. The current analyzer never reads or writes them. The build copies `.agents/` for installation artifacts, while `src/reading/analysis-prompt.ts` is the canonical analysis prompt. Trace events include numeric metadata and hashes only; model-generated themes are counted rather than logged. For inspection commands, see [DEVELOPMENT.md](DEVELOPMENT.md#inspect-analysis-activity).

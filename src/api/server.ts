@@ -24,11 +24,12 @@ import { getItem, queryCorpus } from '../reading/corpus-query.js';
 import { BriefEventStore, briefEventsPayloadHash } from '../reading/brief-events.js';
 import { analysisFreshness, listStaleItems } from '../reading/analysis-freshness.js';
 import { ReaderAnnotationStore } from '../reading/reader-annotations.js';
+import { observeRequest, type RequestOutcomeLogger } from './request-outcomes.js';
 
 export function createReadingApi(
   config: AppConfig,
   db: Database,
-  options: { analyzer?: ReadingAnalyzer; analyzerHealth?: () => AnalyzerHealth; extractor?: typeof extractSource } = {}
+  options: { analyzer?: ReadingAnalyzer; analyzerHealth?: () => AnalyzerHealth; extractor?: typeof extractSource; requestLogger?: RequestOutcomeLogger | null } = {}
 ) {
   const limiter = new RateLimiter({ ingest: 10, query: 30, brief: 10, annotation: 30 });
   const store = new ItemStore(db);
@@ -40,7 +41,11 @@ export function createReadingApi(
     ? () => ({ status: 'ok' as const, warn: false })
     : () => flueAnalyzerHealth(config.flueModel));
 
+  const requestLogger = options.requestLogger === undefined
+    ? (outcome: Parameters<RequestOutcomeLogger>[0]) => console.log(JSON.stringify(outcome))
+    : options.requestLogger;
   return createServer(async (req, res) => {
+    const outcome = observeRequest(req, res, requestLogger);
     let requestId = req.headers['x-request-id']?.toString() ?? null;
     const readRequestBody = async () => {
       const raw = await readJson(req);
@@ -50,9 +55,11 @@ export function createReadingApi(
       }
       return raw;
     };
+
     try {
       assertAllowedHost(req, config);
       const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+      outcome.route(url.pathname);
       setSecurityHeaders(res);
 
       if (req.method === 'GET' && url.pathname === '/health') {
@@ -182,6 +189,7 @@ export function createReadingApi(
       throw new ApiError('NOT_FOUND', 'Route not found', 404);
     } catch (error) {
       const normalized = normalizeError(error);
+      outcome.error(normalized instanceof ApiError ? normalized.code : 'INTERNAL_ERROR');
       const status = normalized instanceof ApiError ? normalized.status : 500;
       return send(res, status, { ok: false, request_id: requestId, data: null, error: toErrorPayload(normalized) });
     }

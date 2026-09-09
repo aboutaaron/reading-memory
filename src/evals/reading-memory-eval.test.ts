@@ -28,13 +28,19 @@ test('reading memory eval passes recall, briefing and durability gates determini
   assert.equal(results.filter((result) => result.check === 'brief_selection').length, 8);
   assert.equal(results.filter((result) => result.check === 'memory_durability').length, 3);
   assert.equal(results.filter((result) => result.check === 'hybrid_retrieval').length, 3);
+  assert.equal(results.filter((result) => result.check === 'lexical_policy').length, 5);
+  assert.equal(results.filter((result) => result.check === 'graph_retrieval').length, 2);
   assert.deepEqual(results.filter((result) => !result.passed), []);
   assert.deepEqual(await runReadingMemoryEval(), results);
   const summary = summarizeReadingMemoryEval(results);
   assert.equal(summary.mean_recall_at_5, 1);
-  assert.equal(summary.checks, 29);
+  assert.equal(summary.checks, 36);
   assert.equal(summary.hybrid_cases, 3);
   assert.equal(summary.passed_hybrid_cases, 3);
+  assert.equal(summary.lexical_policy_cases, 5);
+  assert.equal(summary.passed_lexical_policy_cases, 5);
+  assert.equal(summary.graph_cases, 2);
+  assert.equal(summary.passed_graph_cases, 2);
   assert.match(summary.scope, /canned analyses and embedding vectors/);
   assert.equal(summary.unsupported_query_false_positives, 0);
   assert.equal(summary.unsupported_answers, 0);
@@ -51,12 +57,18 @@ test('eval summary reports degraded recall and selection failures instead of hid
       details: { recall_at_5: null, unsupported_result_count: 2, unsupported_answer: true } },
     { fixture_id: 'bad-brief', check: 'brief_selection', passed: false,
       details: { irrelevant_selections: ['wrong'], missed_due_items: ['due'], unwanted_repeats: ['repeat'] } },
-    { fixture_id: 'bad-hybrid', check: 'hybrid_retrieval', passed: false, details: { unsupported_result_count: 1 } }
+    { fixture_id: 'bad-hybrid', check: 'hybrid_retrieval', passed: false, details: { unsupported_result_count: 1 } },
+    { fixture_id: 'bad-policy', check: 'lexical_policy', passed: false, details: {} },
+    { fixture_id: 'bad-graph', check: 'graph_retrieval', passed: false, details: {} }
   ];
   const summary = summarizeReadingMemoryEval(failures);
   assert.equal(summary.passed, false);
   assert.equal(summary.hybrid_cases, 1);
   assert.equal(summary.passed_hybrid_cases, 0);
+  assert.equal(summary.lexical_policy_cases, 1);
+  assert.equal(summary.passed_lexical_policy_cases, 0);
+  assert.equal(summary.graph_cases, 1);
+  assert.equal(summary.passed_graph_cases, 0);
   assert.equal(summary.mean_recall_at_5, 0.5);
   assert.equal(summary.positive_query_cases, 1);
   assert.equal(summary.unsupported_query_false_positives, 1);

@@ -72,4 +72,6 @@ The default dry run opens the existing database read-only, reports item IDs, and
 
 The deterministic suite uses the real sqlite-vec extension with canned 1,536-dimensional vectors. It verifies paraphrase routing with zero lexical overlap, hard-negative abstention, pre-limit filtering, rank fusion, transaction/restart behavior, provider failure and API privacy. These fixtures test storage and retrieval contracts. They do not establish that a live embedding model improves this reader's recall, or measure live model quality, cost or latency. Keep hybrid opt-in until a private, representative reading evaluation demonstrates that improvement.
 
+The expanded evaluation also tests lexical-policy tradeoffs and bounded graph context. Passing a fixture that records lost strict-policy recall makes that tradeoff explicit; it does not demonstrate improved quality. Follow the [OpenClaw retest protocol](OPENCLAW-RETEST.md) for a paired private-corpus comparison and a separate answer-support audit.
+
 Implementation references: [sqlite-vec Node bindings](https://alexgarcia.xyz/sqlite-vec/js.html), [sqlite-vec KNN behavior](https://alexgarcia.xyz/sqlite-vec/features/knn.html), and [Node SQLite extension loading](https://nodejs.org/api/sqlite.html#databaseloadextensionpath-entrypoint).

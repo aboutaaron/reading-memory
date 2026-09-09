@@ -136,7 +136,7 @@ curl -s -X POST http://127.0.0.1:4727/ingest \
   -d '{"request_id":"00000000-0000-4000-8000-000000000001","source_type":"text","source":{"text":"Agent memory needs durable recall.","title":"Note"}}' | jq
 ```
 
-Supported source types: `url`, `text`, `pdf_url`. URL and PDF ingestion require HTTPS. Private IPs, redirects to private IPs, unsupported MIME types, and oversized bodies are blocked.
+Supported source types: `url`, `text`, `pdf_url`. URL and PDF ingestion require HTTPS. Every request and redirect resolves its host once, rejects non-public results, and pins its socket to a validated address while preserving the original TLS identity and HTTP Host. Loopback names, private/mapped addresses, credentials in URLs, unsupported MIME types, and oversized bodies are blocked. See [URL fetching](docs/URL-FETCHING.md) for the network contract and regression tests.
 
 `POST /brief-events` is idempotent by `request_id` and guarded against equivalent duplicate events for the same item/date/kind/source context.
 

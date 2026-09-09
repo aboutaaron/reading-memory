@@ -50,7 +50,7 @@ Call `POST /query` before answering questions that may depend on stored reading 
 
 Use returned items as evidence, not as final answers. If query results are weak or empty, say so.
 
-Read `match_strategy` and `matched_terms`: partial matches may cover only part of the question. Lexical retrieval may miss paraphrases without shared terms. `confidence: null` means uncalibrated, and the compatibility `answer` field is empty. Do not turn the number of results or a lexical score into certainty. Use `GET /items/:id` to inspect retained source text, truncation, rationale, and relationship evidence before making claims that depend on them.
+Read `match_strategy` and `matched_terms`: partial matches may cover only part of the question. Lexical retrieval may miss paraphrases without shared terms. `confidence: null` means uncalibrated, and the compatibility `answer` field is empty. Do not turn the number of results or a lexical score into certainty. Use `GET /items/:id` for truncation, rationale, annotations, and relationship evidence. Add `?include=text` only when you need the retained source text to verify a claim; default item reads omit that potentially large field.
 
 ## Preserve Reader Judgment
 
@@ -75,6 +75,7 @@ Brief event rules:
 - Use `included` when a brief uses an item, `skipped` when a returned item is deliberately not used, and `resurfaced` when a previously deferred item reappears with a new angle.
 - Set `resurface_after` on an included item only when it should be eligible again after that date. Omitting it suppresses normal repeats after inclusion.
 - An explicit due schedule can bring back older reading outside the normal lookback and override an analysis skip recommendation. Included and resurfaced events both count as use; a later skipped event does not erase that history. Dates cover complete UTC days.
+- Recording `resurfaced` without a new future `resurface_after` suppresses further brief appearances until a later event supplies a schedule. Set a new future date when another appearance is intended.
 - Batch `skip_items` from `/brief-guide` into `/brief-events` as `skipped` when the caller intentionally rejects them.
 
 ## API Shape

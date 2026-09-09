@@ -104,8 +104,12 @@ function emptyQueryResult(reason: string, terms: string[]) {
   };
 }
 
-export function getItem(db: Database, itemId: string) {
-  const item = db.prepare('SELECT * FROM items WHERE id = ?').get(itemId) as Record<string, unknown> | undefined;
+export function getItem(db: Database, itemId: string, options: { includeText?: boolean } = {}) {
+  const item = db.prepare(`
+    SELECT id, status, source_type, source_uri, title, content_hash, truncated,
+      author, publisher, published_at, provenance_json${options.includeText ? ', extracted_text' : ''}
+    FROM items WHERE id = ?
+  `).get(itemId) as Record<string, unknown> | undefined;
   if (!item) return null;
   const analysis = db.prepare('SELECT * FROM analyses WHERE item_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1').get(itemId) as Record<string, unknown> | undefined;
   const tags = db.prepare('SELECT tag, reason, confidence FROM tags WHERE item_id = ? ORDER BY confidence DESC').all(itemId);
@@ -118,7 +122,7 @@ export function getItem(db: Database, itemId: string) {
     title: item.title,
     content_hash: item.content_hash,
     truncated: Boolean(item.truncated),
-    extracted_text: item.extracted_text,
+    ...(options.includeText ? { extracted_text: item.extracted_text } : {}),
     author: item.author,
     publisher: item.publisher,
     published_at: item.published_at,

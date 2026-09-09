@@ -179,7 +179,7 @@ async function memoryChecks(db: Database, ids: Map<string, string>): Promise<Rea
   });
   db.prepare('UPDATE items SET ingested_at = ? WHERE id = ?').run(EVAL_INGESTED_AT, connected.item_id);
   db.prepare('UPDATE analyses SET created_at = ? WHERE item_id = ?').run(EVAL_INGESTED_AT, connected.item_id);
-  const retrieved = getItem(db, connected.item_id);
+  const retrieved = getItem(db, connected.item_id, { includeText: true });
   const relationship = retrieved?.relationships.find((connection) => connection.to_item_id === itemId);
   results.push({
     fixture_id: 'durable-connection-evidence', check: 'memory_durability',

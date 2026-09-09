@@ -27,7 +27,7 @@ export function createReadingApi(
   db: Database,
   options: { analyzer?: ReadingAnalyzer; analyzerHealth?: () => AnalyzerHealth; extractor?: typeof extractSource } = {}
 ) {
-  const limiter = new RateLimiter({ ingest: 10, query: 30, brief: 10 });
+  const limiter = new RateLimiter({ ingest: 10, query: 30, brief: 10, annotation: 30 });
   const store = new ItemStore(db);
   const briefEventStore = new BriefEventStore(db);
   const annotations = new ReaderAnnotationStore(db);
@@ -109,7 +109,7 @@ export function createReadingApi(
 
       const annotationMatch = /^\/items\/([^/]+)\/annotations$/.exec(url.pathname);
       if (req.method === 'POST' && annotationMatch?.[1]) {
-        limiter.check(principal, 'ingest');
+        limiter.check(principal, 'annotation');
         const body = v.parse(AnnotationRequestSchema, await readJson(req));
         const data = annotations.record({ principal, requestId: body.request_id, itemId: annotationMatch[1], body });
         return send(res, 200, { ok: true, request_id: body.request_id, data, error: null });
@@ -117,7 +117,11 @@ export function createReadingApi(
 
       const itemMatch = /^\/items\/([^/]+)$/.exec(url.pathname);
       if (req.method === 'GET' && itemMatch?.[1]) {
-        const item = getItem(db, itemMatch[1]);
+        const includes = url.searchParams.getAll('include');
+        if (includes.length > 1 || (includes.length === 1 && includes[0] !== 'text')) {
+          throw new ApiError('BAD_REQUEST', 'include must be a single value: text', 400);
+        }
+        const item = getItem(db, itemMatch[1], { includeText: includes[0] === 'text' });
         if (!item) throw new ApiError('NOT_FOUND', 'Item not found', 404);
         return send(res, 200, { ok: true, request_id: requestId, data: item, error: null });
       }
@@ -220,7 +224,7 @@ function capabilities() {
     max_text_chars: LIMITS.maxTextChars,
     max_url_bytes: LIMITS.maxUrlBytes,
     max_pdf_pages: LIMITS.maxPdfPages,
-    rate_limits: { ingest_per_minute: 10, query_per_minute: 30 }
+    rate_limits: { ingest_per_minute: 10, query_per_minute: 30, annotation_per_minute: 30 }
   };
 }
 

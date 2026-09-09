@@ -142,7 +142,7 @@ Supported source types: `url`, `text`, `pdf_url`. URL and PDF ingestion require 
 
 ### Reader annotations
 
-`POST /items/:id/annotations` uses the same bearer authentication and ingest rate limit. Use a fresh UUID for each operation and reuse it only for the same retry:
+`POST /items/:id/annotations` uses bearer authentication and a separate allowance of 30 annotation writes per minute. These writes do not consume the 10-per-minute ingestion allowance, and ingestion does not consume annotation capacity. `/capabilities.rate_limits.annotation_per_minute` exposes this limit. Use a fresh UUID for each operation and reuse it only for the same retry:
 
 ```json
 {
@@ -167,9 +167,13 @@ To correct a note, create a new annotation with `supersedes_annotation_id` point
 
 ### Retrieval and brief compatibility
 
+`GET /items/:id` omits `extracted_text` by default. Metadata, `truncated`, `analysis.reason`, annotation history, and relationship quotations remain available in the default response. Use `GET /items/:id?include=text` to opt into the retained source text (up to 100,000 characters); `truncated` still describes truncation at ingestion, not response pagination. The only supported include value is a single `include=text` parameter.
+
 Query results retain `answer: ''` and return `confidence: null` for nonempty results (`0` for empty results). These are compatibility fields, not generated answers or calibrated retrieval confidence. Read `retrieval_hint`, `search_terms`, `match_strategy`, `results[].matched_terms`, snippets, and citations. A partial-term fallback requires inspection before synthesis.
 
 Brief `brief_date` is a valid calendar date in UTC. The lookback ends at the next midnight, and future items/analyses are excluded. Events use their recorded business `brief_date`; this supports recording the outcome of an earlier brief. Due schedules are considered outside the normal lookback. The service selects up to eight eligible items before returning up to ten skip explanations. This does not send a brief or schedule delivery.
+
+Both `included` and `resurfaced` now count as consumption. Recording `resurfaced` without a new future `resurface_after` suppresses the item indefinitely from subsequent briefs until a later event schedules another appearance. To allow another appearance, supply a future `resurface_after` on the consumption event or record a later scheduling event. A later `skipped` event without a schedule does not undo consumption. This changes the previous behavior in which resurfaced items could repeat immediately.
 
 ## Deploy On A VPS
 

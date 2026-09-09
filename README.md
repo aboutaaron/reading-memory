@@ -249,3 +249,5 @@ Lexical search remains the default. Set `READING_API_EMBEDDING_MODEL=openai/text
 All query modes accept `lexical_policy: "all"` to exclude partial keyword matches; default `any` retains OR fallback. Optional `mode: "hybrid+graph"` adds bounded one-hop context from existing quote-backed source relationships in SQLite. Results identify graph provenance and unverified relationship interpretations. Neither strict matching nor graph context establishes answer support; inspect source passages before answering.
 
 Use the [OpenClaw retest protocol](docs/OPENCLAW-RETEST.md) to compare the modes on an isolated copy of your reading corpus, including negative questions, relationship audits and evidence-supported answers.
+
+For missing graph connections or stale analyses, use authenticated `GET /diagnostics` (MCP `diagnostics`) and the [graph maintenance guide](docs/GRAPH-MAINTENANCE.md). It explains model/version mismatches and counts quote-valid model edges. Preview bounded reanalysis with `npm run reanalyze -- --stale --limit 25 --dry-run`; `--apply` performs the work. The historical command without either flag still applies.

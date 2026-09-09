@@ -54,6 +54,10 @@ const definitions: ToolDefinition[] = [
     description: 'Check local Reading Memory readiness, database, analyzer, and backups when a request fails or before relying on the service. A successful HTTP response alone does not mean ready=true.'
   },
   {
+    name: 'diagnostics', method: 'GET', path: '/diagnostics', schema: v.strictObject({}), readOnly: true,
+    description: 'Inspect analysis freshness reasons, embedding availability and graph relationship coverage. Read-only; makes no provider calls. Eligible graph edges have current exact quotations but their meaning is unverified. Zero edges or stale analyses alone do not establish that the analyzer model is inadequate.'
+  },
+  {
     name: 'forget', method: 'DELETE', schema: v.strictObject({ item_id: ItemIdSchema }),
     path: (input) => `/items/${input.item_id}`, destructive: true,
     description: 'Permanently forget a saved item only when the user requests deletion. Removes that item and its related corpus records; backups are separate. A second deletion returns not found.'

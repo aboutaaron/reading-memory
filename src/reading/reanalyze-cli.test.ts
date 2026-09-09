@@ -40,3 +40,27 @@ test('stale maintenance rejects remote endpoints and caps failures without print
   assert.throws(() => parseReanalyzeArgs(['--stale', '--limit', '0']), /limit/);
   assert.throws(() => parseReanalyzeArgs(['--limit', '5']), /Usage/);
 });
+
+test('dry-run only reads bounded stale selection, reports policy reasons, and never mutates', async () => {
+  const calls: string[] = [];
+  const { parseReanalyzeOptions } = await import('../../scripts/reanalyze.js');
+  const result = await reanalyzeStale({ baseUrl: 'http://127.0.0.1:4727', token: 'test', limit: 1, dryRun: true,
+    wait: async () => { assert.fail('preview must not schedule analysis'); },
+    report: () => { assert.fail('preview must not report completed analysis'); },
+    fetcher: (async (url, options) => {
+      calls.push(String(url));
+      assert.equal(options?.method, 'GET');
+      assert.equal(options?.body, undefined);
+      return success({ items: [{ item_id: 'first', analysis_version: 'old', model: 'gpt-5.6-luna',
+        stale_reasons: ['version_mismatch'], title: 'Private reading title' }, { item_id: 'extra' }] });
+    }) as typeof fetch });
+  assert.equal(calls.length, 1);
+  assert.deepEqual(result, { selected: 1, completed: 0, failed: 0, dry_run: true,
+    items: [{ item_id: 'first', analysis_version: 'old', model: 'gpt-5.6-luna', stale_reasons: ['version_mismatch'] }] });
+  assert.doesNotMatch(JSON.stringify(result), /Private reading title/);
+  assert.deepEqual(parseReanalyzeOptions(['--stale', '--limit', '25', '--dry-run']), { limit: 25, dryRun: true });
+  assert.deepEqual(parseReanalyzeOptions(['--apply', '--stale', '--limit', '25']), { limit: 25, dryRun: false });
+  assert.deepEqual(parseReanalyzeOptions(['--stale', '--limit', '25']), { limit: 25, dryRun: false });
+  assert.throws(() => parseReanalyzeOptions(['--stale', '--limit', '25', '--apply', '--dry-run']), /Usage/);
+  assert.throws(() => parseReanalyzeOptions(['--stale', '--limit', '25', '--dry-run', '--dry-run']), /Usage/);
+});

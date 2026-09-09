@@ -2,7 +2,7 @@ import { performance } from 'node:perf_hooks';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { ErrorCode } from './errors.js';
 
-const ROUTES = ['/health', '/capabilities', '/ingest', '/query', '/brief-guide', '/brief-events', '/activity', '/items'] as const;
+const ROUTES = ['/health', '/capabilities', '/diagnostics', '/ingest', '/query', '/brief-guide', '/brief-events', '/activity', '/items'] as const;
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'] as const;
 const ERROR_CODES: readonly ErrorCode[] = ['BAD_REQUEST', 'UNAUTHORIZED', 'NOT_FOUND', 'ITEM_FORGOTTEN', 'RATE_LIMITED',
   'IDEMPOTENCY_CONFLICT', 'ANALYSIS_IN_PROGRESS', 'FETCH_FAILED', 'UNSUPPORTED_MIME', 'PAYLOAD_TOO_LARGE',

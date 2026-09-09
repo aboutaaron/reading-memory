@@ -129,8 +129,7 @@ test('Flue analyzer loads the packaged analyze-item skill without persisting opa
     assert.deepEqual(result.relationships, []);
     assert.equal(faux.state.callCount, 1);
 
-    const sessions = db.prepare('SELECT id, data FROM sessions').all() as Array<{ id: string; data: string }>;
-    assert.equal(sessions.length, 0);
+    assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name = 'sessions'").get(), undefined);
   } finally {
     faux.unregister();
   }

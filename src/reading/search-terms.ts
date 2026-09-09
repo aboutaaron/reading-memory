@@ -30,6 +30,22 @@ export function extractSearchTerms(
   return [...seen].slice(0, Math.max(0, maxTerms));
 }
 
+/** Rank source terms over the whole article; equal counts retain first-seen order. */
+export function extractFrequentSearchTerms(text: string, maxTerms = 64): string[] {
+  const counts = new Map<string, { count: number; firstSeen: number }>();
+  const words = text.normalize('NFKC').toLowerCase().match(/[\p{L}\p{N}][\p{L}\p{M}\p{N}]*/gu) ?? [];
+  for (const word of words) {
+    if (STOP_WORDS.has(word)) continue;
+    const existing = counts.get(word);
+    if (existing) existing.count++;
+    else counts.set(word, { count: 1, firstSeen: counts.size });
+  }
+  return [...counts]
+    .sort(([, a], [, b]) => b.count - a.count || a.firstSeen - b.firstSeen)
+    .slice(0, Math.max(0, maxTerms))
+    .map(([word]) => word);
+}
+
 /** Quote each lexical term so user text can never introduce FTS operators. */
 export function toFtsQuery(terms: string[], operator: 'AND' | 'OR' = 'OR'): string {
   return terms.map((term) => `"${term.replaceAll('"', '""')}"`).join(` ${operator} `);

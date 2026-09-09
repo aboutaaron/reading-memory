@@ -1,5 +1,5 @@
 import type { Database } from '../db/connection.js';
-import { extractSearchTerms, toFtsQuery } from './search-terms.js';
+import { extractFrequentSearchTerms, extractSearchTerms, toFtsQuery } from './search-terms.js';
 
 export const READING_CONTEXT_LIMITS = {
   priorItems: 5,
@@ -11,6 +11,9 @@ export const READING_CONTEXT_LIMITS = {
   projectChars: 120,
   callerContextChars: 1000
 } as const;
+
+// Reserve room for each signal within the existing 64-term query bound.
+const TERM_BUDGETS = { title: 8, callerContext: 8, annotations: 8, source: 40 } as const;
 
 export type CallerReadingContext = {
   source_context?: string | null;
@@ -48,13 +51,15 @@ export function buildReadingContext(db: Database, input: {
     ingest_reason: bounded(input.readerContext?.ingest_reason, READING_CONTEXT_LIMITS.callerContextChars),
     annotations: activeAnnotations(db, input.itemId)
   };
-  const terms = extractSearchTerms([
-    input.title,
-    readerContext.ingest_reason,
-    readerContext.source_context,
-    ...readerContext.annotations.flatMap((annotation) => [annotation.question, annotation.project, annotation.note]),
-    input.text
-  ]);
+  const terms = [...new Set([
+    ...extractSearchTerms([input.title], TERM_BUDGETS.title),
+    ...extractSearchTerms([readerContext.ingest_reason, readerContext.source_context], TERM_BUDGETS.callerContext),
+    ...extractSearchTerms(
+      readerContext.annotations.flatMap((annotation) => [annotation.question, annotation.project, annotation.note]),
+      TERM_BUDGETS.annotations
+    ),
+    ...extractFrequentSearchTerms(input.text, TERM_BUDGETS.source)
+  ])];
   if (terms.length === 0) return { reader_context: readerContext, prior_items: [] as PriorReadingItem[] };
 
   const rows = db.prepare(`

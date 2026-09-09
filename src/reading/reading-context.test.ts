@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openMemoryDatabase, type Database } from '../db/connection.js';
 import { buildReadingContext, READING_CONTEXT_LIMITS } from './reading-context.js';
+import { extractFrequentSearchTerms, extractSearchTerms } from './search-terms.js';
 
 function seed(db: Database, id: string, text: string, status = 'indexed') {
   db.prepare(`INSERT INTO items (id, source_type, title, ingested_at, content_hash, status, extracted_text)
@@ -38,6 +39,51 @@ test('source evidence is verbatim and can come from a relevant passage late in t
   assert(passages.join('').includes('Cache invalidation requires checking the version before reuse.'));
   assert(passages.length <= READING_CONTEXT_LIMITS.sourcePassages);
   assert(passages.every((passage) => passage.length <= READING_CONTEXT_LIMITS.passageChars && source.includes(passage)));
+});
+
+test('verbose title, caller metadata, and active annotations leave room for every retrieval signal', () => {
+  const db = openMemoryDatabase();
+  seed(db, 'prior', 'Cache invalidation requires checking the version before reuse.');
+  seed(db, 'title', 'Topictitle');
+  seed(db, 'caller', 'Topiccaller');
+  seed(db, 'annotation', 'Topicannotation');
+  seed(db, 'current', 'Cache invalidation version reuse.');
+  const noise = (prefix: string) => Array.from({ length: 90 }, (_, index) => `${prefix}${index}`).join(' ');
+  db.prepare(`INSERT INTO reader_annotations (id, item_id, actor_type, actor, note, created_at)
+    VALUES ('note', 'current', 'user', 'Aaron', ?, '2026-09-02T01:00:00Z')`).run(`Topicannotation ${noise('n')}`);
+  const context = buildReadingContext(db, {
+    itemId: 'current',
+    title: `Topictitle ${noise('t')}`,
+    text: 'Cache invalidation version reuse.',
+    readerContext: { ingest_reason: `Topiccaller ${noise('r')}`, source_context: noise('c') }
+  });
+  assert.deepEqual(context.prior_items.map((item) => item.item_id).sort(), ['annotation', 'caller', 'prior', 'title']);
+});
+
+test('source retrieval counts repeated body terms after a long unique lede and returns exact late evidence', () => {
+  const db = openMemoryDatabase();
+  const evidence = 'Cache invalidation requires checking the version before reuse.';
+  const priorSource = `${'Opening filler without the actual topic. '.repeat(200)}${evidence} ${'Closing unrelated filler. '.repeat(100)}`;
+  seed(db, 'prior', priorSource);
+  const lede = Array.from({ length: 90 }, (_, index) => `lede${index}`).join(' ');
+  const metadata = Array.from({ length: 90 }, (_, index) => `meta${index}`).join(' ');
+  const context = buildReadingContext(db, {
+    itemId: 'current', title: null,
+    text: `${lede}\n${'Cache invalidation version reuse. '.repeat(10)}`,
+    readerContext: { ingest_reason: metadata, source_context: metadata }
+  });
+  assert.deepEqual(context.prior_items.map((item) => item.item_id), ['prior']);
+  const passages = context.prior_items[0]!.source_passages;
+  assert(passages.some((passage) => passage.includes(evidence)));
+  assert(passages.length <= READING_CONTEXT_LIMITS.sourcePassages);
+  assert(passages.every((passage) => passage.length <= READING_CONTEXT_LIMITS.passageChars && priorSource.includes(passage)));
+});
+
+test('source term frequency ties are deterministic and recall retains original term order', () => {
+  const text = 'First second cache cache second invalidation invalidation';
+  assert.deepEqual(extractFrequentSearchTerms(text, 2), ['second', 'cache']);
+  assert.deepEqual(extractFrequentSearchTerms(text, 3), ['second', 'cache', 'invalidation']);
+  assert.deepEqual(extractSearchTerms(text, 2), ['first', 'second']);
 });
 
 test('reader context preserves attributed active notes with bounded caller and annotation fields', () => {

@@ -8,7 +8,8 @@ export type ArticleExtraction = {
   author: string | null;
   publisher: string | null;
   publishedAt: string | null;
-  extractor: 'readability' | 'html-fallback';
+  extractor: 'readability' | 'html-fallback' | 'structured-article-body';
+  completeness: 'unknown';
   titleSource: 'article' | 'document' | null;
 };
 
@@ -87,6 +88,100 @@ function textFromNode(root: HtmlNode): string {
   return chunks.join('').replace(/[ \t\u00a0]+/g, ' ').replace(/ *\n */g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
+// This is a shell-content check, not a minimum article length or a topic filter.
+// A short sentence about privacy is still content. Only recognizable UI-only
+// candidates are rejected; passing this check does not prove completeness.
+function hasArticleText(root: HtmlNode): boolean {
+  const candidate = root.cloneNode(true) as HtmlNode;
+  for (const node of candidate.querySelectorAll('a,button,input,select,h1,h2,h3,script,style,noscript,template,head,svg')) node.remove();
+  const text = textFromNode(candidate);
+  if (!text) return false;
+  const units = text.split(/\n+|(?<=[.!?])\s+/).map(value => value.trim()).filter(Boolean);
+  const shell = /^(?:(?:we|this (?:site|website)) (?:use|uses) cookies\b|(?:we|our partners) (?:and our partners )?(?:use|process|store|access) (?:your personal data|personal data|information on your device)\b|by (?:clicking|continuing|using this (?:site|website))\b|(?:please )?(?:accept|reject|allow|manage|customize|save) (?:all |your |our |the )?(?:cookies|cookie preferences|preferences|settings|choices)\b|(?:cookie|consent|privacy) (?:settings|preferences|policy|notice|choices|center|centre)$|(?:your privacy|we value your privacy|we respect your privacy|privacy matters|cookies on this site)$|(?:accept all|reject all|accept|reject|continue|close|menu|home|search|sign in|log in|subscribe|all rights reserved)[.!]?$)/i;
+  return units.some(unit => !shell.test(unit));
+}
+
+// Explicit JSON-LD identities must refer to the fetched page. A recommendation
+// is not evidence from this URL, even when it is the only article in the script.
+// Resolve relative identities locally and ignore fragments; never fetch them or
+// trust an arbitrary canonical/metadata URL to relabel the captured response.
+function articleMatchesPage(record: Record<string, unknown>, pageUrl: string): boolean {
+  let page: URL;
+  try { page = new URL(pageUrl); page.hash = ''; } catch { return false; }
+  const matches = (value: unknown): boolean => {
+    if (typeof value !== 'string' || !value.trim()) return false;
+    try {
+      const identity = new URL(value, pageUrl);
+      identity.hash = '';
+      return (identity.protocol === 'https:' || identity.protocol === 'http:') && identity.href === page.href;
+    } catch { return false; }
+  };
+  for (const key of ['url', '@id']) {
+    if (key in record && !matches(record[key])) return false;
+  }
+  if ('mainEntityOfPage' in record) {
+    const entity = record.mainEntityOfPage;
+    if (typeof entity === 'string') return matches(entity);
+    if (!entity || typeof entity !== 'object' || Array.isArray(entity)) return false;
+    const identity = entity as Record<string, unknown>;
+    const keys = ['url', '@id'].filter(key => key in identity);
+    return keys.length > 0 && keys.every(key => matches(identity[key]));
+  }
+  return true;
+}
+
+// Only a recognized schema.org articleBody is read from JSON. Framework state,
+// arbitrary scripts, metadata descriptions, and paywalled structured bodies are
+// deliberately not fallback sources. Bounds are independent of fetched-byte caps.
+function structuredArticleBody(document: HtmlDocument, url: string): string | null {
+  const bodies = new Set<string>();
+  let bytes = 0;
+  let visited = 0;
+  let exceededBudget = false;
+  const inspect = (value: unknown, depth: number): void => {
+    if (depth > 8 || ++visited > 512) { exceededBudget = true; return; }
+    if (!value || typeof value !== 'object') return;
+    if (Array.isArray(value)) {
+      if (value.length > 512) { exceededBudget = true; return; }
+      for (const entry of value) inspect(entry, depth + 1);
+      return;
+    }
+    const record = value as Record<string, unknown>;
+    const types = Array.isArray(record['@type']) ? record['@type'] : [record['@type']];
+    if (types.some(type => typeof type === 'string' && /^(?:https?:\/\/schema\.org\/)?(?:Article|NewsArticle|BlogPosting|ScholarlyArticle|TechArticle)$/.test(type)) && (record.isAccessibleForFree === true || record.isAccessibleForFree === 'true')) {
+      if (typeof record.articleBody === 'string' && record.articleBody.length <= 256_000 && articleMatchesPage(record, url)) {
+        // articleBody is text, not an HTML or script execution channel.
+        const body = record.articleBody.replace(/\r\n?/g, '\n').trim();
+        const holder = documentFromHtml('<p></p>', url);
+        holder.body.querySelector('p')!.textContent = body;
+        if (hasArticleText(holder.body)) bodies.add(body);
+      }
+    }
+    // JSON-LD commonly wraps nodes in @graph. Do not recurse through arbitrary
+    // properties (e.g. a recommendation's nested article or framework state).
+    if (record['@graph']) inspect(record['@graph'], depth + 1);
+  };
+  const scripts = document.querySelectorAll('script[type="application/ld+json"]');
+  if (scripts.length > 16) return null;
+  for (const script of scripts) {
+    const source = script.textContent ?? '';
+    bytes += source.length;
+    if (bytes > 512_000 || source.length > 256_000) return null;
+    try {
+      const parsed: unknown = JSON.parse(source);
+      const context = Array.isArray(parsed) ? null : parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>)['@context'] : null;
+      // Arrays may contain independently qualified article nodes.
+      if (Array.isArray(parsed)) {
+        if (parsed.length > 512) return null;
+        for (const entry of parsed) {
+          if (entry && typeof entry === 'object' && /^https?:\/\/schema\.org\/?$/.test(String(entry['@context']))) inspect(entry, 0);
+        }
+      } else if (typeof context === 'string' && /^https?:\/\/schema\.org\/?$/.test(context)) inspect(parsed, 0);
+    } catch { /* Invalid JSON is not article text. Never log source content. */ }
+  }
+  return !exceededBudget && bodies.size === 1 ? [...bodies][0]! : null;
+}
+
 export function extractHtml(html: string, url = 'https://reading-memory.invalid/'): ArticleExtraction {
   const document = documentFromHtml(html, url);
   const meta = (names: string[]) => {
@@ -108,7 +203,7 @@ export function extractHtml(html: string, url = 'https://reading-memory.invalid/
     if (article?.content) {
       const articleDocument = documentFromHtml(article.content, url);
       const text = textFromNode(articleDocument.body);
-      if (text) {
+      if (text && hasArticleText(articleDocument.body)) {
         return {
           text,
           title: cleanMetadata(article.title) ?? fallbackTitle,
@@ -116,6 +211,7 @@ export function extractHtml(html: string, url = 'https://reading-memory.invalid/
           publisher: cleanMetadata(article.siteName, 200) ?? fallbackPublisher,
           publishedAt: publicationTime(article.publishedTime) ?? fallbackPublished,
           extractor: 'readability',
+          completeness: 'unknown',
           titleSource: cleanMetadata(article.title) ? 'article' : fallbackTitle ? 'document' : null
         };
       }
@@ -126,14 +222,17 @@ export function extractHtml(html: string, url = 'https://reading-memory.invalid/
   }
 
   removeChrome(document);
-  const root = document.querySelector('article,main,[role="main"]') ?? document.body;
+  const root = document.querySelector('[itemprop="articleBody"]') ?? document.querySelector('article,main,[role="main"]') ?? document.body;
+  const usableVisibleText = hasArticleText(root as HtmlNode);
+  const structuredText = usableVisibleText ? null : structuredArticleBody(document, url);
   return {
-    text: textFromNode(root as HtmlNode),
+    text: usableVisibleText ? textFromNode(root as HtmlNode) : structuredText ?? '',
     title: fallbackTitle,
     author: fallbackAuthor,
     publisher: fallbackPublisher,
     publishedAt: fallbackPublished,
-    extractor: 'html-fallback',
+    extractor: structuredText ? 'structured-article-body' : 'html-fallback',
+    completeness: 'unknown',
     titleSource: fallbackTitle ? 'document' : null
   };
 }

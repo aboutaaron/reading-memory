@@ -36,7 +36,8 @@ const definitions: ToolDefinition[] = [
   },
   {
     name: 'brief_events', method: 'POST', path: '/brief-events', schema: BriefEventsRequestSchema,
-    description: 'Record finalized brief or answer citation outcomes, never mere retrieval. included, resurfaced, and cited require included_bool=true; skipped requires false. Use cited only when a saved source was actually cited in an answer. Included or resurfaced sources stay suppressed until a new resurface_after schedule makes them eligible. Saving or using a source does not establish reader agreement. Retain the same request_id for retries.'
+    description: 'Record finalized brief outcomes or sources actually cited in a finished answer, never mere retrieval. For answer citations use event_kind=cited, included_bool=true, a stable source_context identifying the answer, and no resurface_after. Do not record a separate cited event for a source already counted as included or resurfaced in the same brief. included and resurfaced require included_bool=true; skipped requires false. Included or resurfaced sources stay suppressed until a new resurface_after schedule makes them eligible; answer citations do not consume brief eligibility. Saving or using a source does not establish reader agreement. Retain the same request_id for retries.'
+
   },
   {
     name: 'get_item', method: 'GET', schema: v.object({ item_id: ItemIdSchema, include_text: v.optional(v.boolean()) }),

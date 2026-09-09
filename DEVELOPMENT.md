@@ -300,7 +300,16 @@ systemctl --user start reading-memory.service
 
 Migration failure behavior: migrations run inside a transaction and use `PRAGMA user_version`. If migration fails, startup fails before serving traffic and leaves the prior DB state intact.
 
+## Request outcome logging
+
+Every completed HTTP response emits one `reading-api.request` JSON event to stdout. Events contain only the normalized HTTP method, a route template (for example `/items/:itemId`), status, allowlisted error code, and elapsed milliseconds measured with a monotonic clock. Unknown paths and methods become `unmatched` and `OTHER`. The event contains no URL query, item ID, request ID, headers, credentials, body, source text, reader note, email address, or error message.
+
+Embedded callers can pass `requestLogger` to `createReadingApi` to collect these typed events, or `null` to disable them. Logger failures do not change responses. These events describe completed responses; they are not a durable audit ledger or client-disconnect telemetry.
+
+`GET /health` intentionally requires no bearer token, including when no token is configured, so local service readiness can be diagnosed. All other routes require bearer authentication. This assumes a loopback-only listener and the existing Host-header check; do not expose the service publicly. Token checks hash both values to fixed-size SHA-256 digests before `timingSafeEqual`, without a token-length comparison shortcut.
+
 ## Inspect Analysis Activity
+
 
 Analysis traces are local JSONL files. They record item/session ids, timing, provider name, token counts, title/text lengths and hashes, and numeric judgment metadata. They do not store credentials, raw titles, source text, model output, or model-generated theme strings. The legacy trace filename is retained so existing installations and inspection commands keep working.
 

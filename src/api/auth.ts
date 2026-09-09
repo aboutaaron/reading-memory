@@ -12,14 +12,14 @@ export function requireAuth(req: IncomingMessage, expectedToken: string): string
   }
 
   const auth = req.headers.authorization ?? '';
-  const [scheme, token] = auth.split(' ');
-  if (scheme !== 'Bearer' || !token) {
+  const [scheme, token, extra] = auth.split(' ');
+  if (scheme !== 'Bearer' || !token || extra !== undefined) {
     throw new ApiError('UNAUTHORIZED', 'Missing bearer token', 401);
   }
 
-  const expected = Buffer.from(expectedToken);
-  const actual = Buffer.from(token);
-  if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
+  const expected = createHash('sha256').update(expectedToken).digest();
+  const actual = createHash('sha256').update(token).digest();
+  if (!timingSafeEqual(expected, actual)) {
     throw new ApiError('UNAUTHORIZED', 'Invalid bearer token', 401);
   }
 

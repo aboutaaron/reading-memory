@@ -50,6 +50,7 @@ for (const url of [
   'https://127.0.0.1/private', 'https://127.0.0.2/private', 'https://0.1.2.3/',
   'https://[::1]/', 'https://[::ffff:127.0.0.1]/', 'https://[::ffff:0.1.2.3]/',
   'https://[0:0:0:0:0:ffff:7f00:2]/', 'https://[fe90::1]/', 'https://[fc00::1]/',
+  'https://[2::1]/', 'https://[20::1]/', 'https://[200::1]/', 'https://[4000::1]/',
   'https://[ff02::1]/', 'https://[64:ff9b::7f00:1]/', 'https://[2002:7f00:1::]/'
 ]) {
   test(`blocks non-public literal before DNS or transport: ${url}`, async () => {

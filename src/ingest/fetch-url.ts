@@ -24,7 +24,8 @@ function isPrivateIp(ip: string): boolean {
     }
     // Accept global unicast only. This also excludes local, multicast, NAT64,
     // and unspecified addresses. Block transition tunnels and documentation IPs.
-    return !/^[23]/.test(normalized) || normalized.startsWith('2002:') ||
+    const firstHextet = parseInt(normalized.split(':')[0] || '0', 16);
+    return firstHextet < 0x2000 || firstHextet > 0x3fff || normalized.startsWith('2002:') ||
       normalized.startsWith('2001:0:') || normalized.startsWith('2001::') ||
       normalized.startsWith('2001:db8:');
   }

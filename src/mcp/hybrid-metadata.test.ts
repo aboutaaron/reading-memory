@@ -27,4 +27,8 @@ test('MCP query metadata discloses optional provider traffic and advertises the 
   const mode = query.inputSchema.properties?.mode as { enum?: string[] } | undefined;
   assert.deepEqual(mode?.enum, ['fts', 'fts+usage', 'hybrid']);
   assert.deepEqual(query.inputSchema.properties?.mode, sharedSchema.properties?.mode);
+  const policy = query.inputSchema.properties?.lexical_policy as { enum?: string[] } | undefined;
+  assert.deepEqual(policy?.enum, ['any', 'all']);
+  assert.deepEqual(query.inputSchema.properties?.lexical_policy, sharedSchema.properties?.lexical_policy);
+  assert.match(query.description ?? '', /lexical_policy=all/);
 });

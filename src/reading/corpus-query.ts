@@ -4,9 +4,16 @@ import type { Relationship } from './types.js';
 import { extractSearchTerms, toFtsQuery } from './search-terms.js';
 import { getUsageStats, USAGE_SUMMARY_CTES, USAGE_BOOST_SQL, UNUSED_DECAY_SQL } from './usage-feedback.js';
 
-const USAGE_HINT = 'Lexical matches with a bounded usefulness multiplier, not answer confidence or reader endorsement. Event weights halve after 30 days; usage adjusts BM25 by at most +/-20%. Unused items older than 30 days with relevance below 0.35 lose up to another 10% by day 90. Inspect the cited sources before making claims.';
+const USAGE_HINT = 'Lexical matches with a bounded usefulness multiplier, not answer confidence or reader endorsement. Event weights halve after 30 days; usage adjusts BM25 by at most +/-20%. Unused items older than 30 days with relevance below 0.35 lose up to another 10% by day 90. Lexical coverage measures matched search terms, not answer support; weak_match flags partial lexical matches. Inspect the cited sources before making claims.';
 
-const RETRIEVAL_HINT = 'Full-text retrieval only; no answer has been synthesized. Scores are lexical BM25 ranking scores, not confidence probabilities. Inspect the cited sources before making claims.';
+const RETRIEVAL_HINT = 'Full-text retrieval only; no answer has been synthesized. Scores are lexical BM25 ranking scores, not confidence probabilities. Lexical coverage measures matched search terms, not answer support; weak_match flags partial lexical matches. Inspect the cited sources before making claims.';
+
+export type LexicalPolicy = 'any' | 'all';
+export type LexicalMatchMetadata = {
+  lexical_match: 'all_terms' | 'partial_terms' | 'not_selected';
+  lexical_coverage: number | null;
+  weak_match: boolean | null;
+};
 
 type QueryRow = {
   item_id: string;
@@ -22,13 +29,14 @@ type QueryRow = {
   unused_decay?: number;
 };
 
-export function queryCorpus(db: Database, input: { query: string; topK?: number; since?: string; tags?: string[]; mode?: 'fts' | 'fts+usage'; asOf?: string }) {
+export function queryCorpus(db: Database, input: { query: string; topK?: number; since?: string; tags?: string[]; mode?: 'fts' | 'fts+usage'; asOf?: string; lexical_policy?: LexicalPolicy }) {
   const mode = input.mode ?? 'fts';
+  const lexicalPolicy = input.lexical_policy ?? 'any';
   const withUsage = mode === 'fts+usage';
   const asOf = input.asOf ?? new Date().toISOString();
   const topK = Math.max(1, Math.min(25, input.topK ?? 10));
   const terms = extractSearchTerms(input.query);
-  if (terms.length === 0) return emptyQueryResult('No searchable reading-corpus terms found.', terms, mode);
+  if (terms.length === 0) return emptyQueryResult('No searchable reading-corpus terms found.', terms, mode, lexicalPolicy);
 
   const tags = input.tags ?? [];
   const search = db.prepare(`
@@ -60,13 +68,15 @@ export function queryCorpus(db: Database, input: { query: string; topK?: number;
 
   let rows = find('AND');
   let matchStrategy: 'all_terms' | 'partial_terms' = 'all_terms';
-  if (rows.length === 0 && terms.length > 1) {
+  if (rows.length === 0 && terms.length > 1 && lexicalPolicy === 'any') {
     rows = find('OR');
     matchStrategy = 'partial_terms';
   }
 
   if (rows.length === 0) {
-    return emptyQueryResult('No matching reading-corpus items found.', terms, mode);
+    return emptyQueryResult(lexicalPolicy === 'all'
+      ? 'No reading-corpus item matched all search terms under the applied filters; partial lexical fallback is disabled.'
+      : 'No matching reading-corpus items found.', terms, mode, lexicalPolicy);
   }
 
   // Ask FTS itself which terms matched, including matches in titles, summaries,
@@ -102,10 +112,14 @@ export function queryCorpus(db: Database, input: { query: string; topK?: number;
       match_reason: matchStrategy === 'all_terms'
         ? 'Matched all search terms in the full-text index and applied filters.'
         : 'Partial lexical match: no item matched all search terms; retried with OR and applied filters.',
-      matched_terms: matchedTerms.get(row.item_id) ?? []
+      matched_terms: matchedTerms.get(row.item_id) ?? [],
+      lexical_match: matchStrategy,
+      lexical_coverage: (matchedTerms.get(row.item_id)?.length ?? 0) / terms.length,
+      weak_match: matchStrategy === 'partial_terms'
     })),
     confidence: null,
     retrieval_mode: mode,
+    lexical_policy: lexicalPolicy,
     retrieval_hint: mode === 'fts+usage' ? USAGE_HINT : RETRIEVAL_HINT,
     search_terms: terms,
     match_strategy: matchStrategy,
@@ -113,13 +127,14 @@ export function queryCorpus(db: Database, input: { query: string; topK?: number;
   };
 }
 
-function emptyQueryResult(reason: string, terms: string[], mode: 'fts' | 'fts+usage') {
+function emptyQueryResult(reason: string, terms: string[], mode: 'fts' | 'fts+usage', lexicalPolicy: LexicalPolicy) {
   return {
     answer: '',
     citations: [],
     results: [],
     confidence: 0,
     retrieval_mode: mode,
+    lexical_policy: lexicalPolicy,
     retrieval_hint: mode === 'fts+usage' ? USAGE_HINT : RETRIEVAL_HINT,
     search_terms: terms,
     match_strategy: 'none' as const,

@@ -27,6 +27,14 @@ Use the ordinary authenticated `/query` envelope with `mode: "hybrid"`:
 
 Hybrid results expose `lexical_rank`, `vector_rank`, `cosine_distance` and matched lexical terms. Semantic-only hits can have no matched terms. Vector candidates require cosine distance at most 0.5. This threshold is a conservative, uncalibrated relevance guard, not a calibrated confidence score. It can miss useful reading and still admit irrelevant neighbors; inspect the retained source before making claims.
 
+### Weak lexical matches
+
+All query modes accept `lexical_policy: "any" | "all"`. The default `any` preserves the existing behavior: first require every extracted search term, then retry with OR if no item matches them all. Set `all` to disable the OR fallback. This applies before the lexical candidate limit, including usage ranking and hybrid's provider fallback. It can reduce incidental keyword matches but miss useful sources when a question contains words the source does not use. It is a recall/precision control, not automatic answer abstention.
+
+Results expose `lexical_match` (`all_terms`, `partial_terms`, or `not_selected`), `lexical_coverage` (fraction of extracted terms matched), and `weak_match` (true for partial lexical matches). Semantic-only candidates have null coverage and weak-match values because their lexical coverage was not measured; absence from the selected lexical candidates does not prove zero word overlap. The response reports the applied `lexical_policy` even when empty or falling back.
+
+In hybrid mode, `all` restricts only lexical candidates: semantic neighbors can still be returned. Neither full term coverage nor a vector match proves a passage answers the question. Read retained source text, verify each claim, and decline to answer from the memory when evidence is insufficient.
+
 When embeddings are available, prior-source analysis context and ingest-related-item hints can also include vector neighbors. Existing source quotation validation still applies to model relationships. A vector neighbor does not imply contradiction, agreement or reader endorsement.
 
 ## Storage and maintenance

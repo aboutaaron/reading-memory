@@ -133,3 +133,47 @@ test('result counts never manufacture answer confidence', (t) => {
   assert.equal(result.citations.length, result.results.length);
   assert.equal(result.results.length, 12);
 });
+
+test('strict lexical policy suppresses partial near misses in both lexical modes without changing the default', (t) => {
+  const db = openMemoryDatabase();
+  t.after(() => db.close());
+  addItem(db, 'partial', 'Cache invalidation depends on ownership.');
+  for (const mode of ['fts', 'fts+usage'] as const) {
+    const input = { query: 'cache invalidation quasars', mode };
+    const permissive = queryCorpus(db, input);
+    assert.equal(permissive.lexical_policy, 'any');
+    assert.deepEqual(permissive.citations, ['partial']);
+    assert.equal(permissive.results[0]?.lexical_match, 'partial_terms');
+    assert.equal(permissive.results[0]?.lexical_coverage, 2 / 3);
+    assert.equal(permissive.results[0]?.weak_match, true);
+    assert.equal(permissive.confidence, null);
+    assert.deepEqual(queryCorpus(db, { ...input, lexical_policy: 'any' }), permissive);
+
+    const strict = queryCorpus(db, { ...input, lexical_policy: 'all' });
+    assert.equal(strict.lexical_policy, 'all');
+    assert.equal(strict.retrieval_mode, mode);
+    assert.equal(strict.match_strategy, 'none');
+    assert.deepEqual(strict.results, []);
+    assert.match(strict.empty_reason ?? '', /partial lexical fallback is disabled/);
+  }
+});
+
+test('strict policy retains full FTS matches and filters without treating term coverage as answer confidence', (t) => {
+  const db = openMemoryDatabase();
+  t.after(() => db.close());
+  addItem(db, 'allowed', 'Cache invalidation matters.', { tags: ['infra'] });
+  addItem(db, 'old', 'Cache invalidation matters.', { tags: ['infra'], ingestedAt: '2026-08-01' });
+  addItem(db, 'wrong-tag', 'Cache invalidation matters.', { tags: ['cooking'] });
+  for (const mode of ['fts', 'fts+usage'] as const) {
+    const result = queryCorpus(db, { query: 'cache cache invalidation', lexical_policy: 'all', mode,
+      since: '2026-09-01', tags: ['infra'], topK: 1 });
+    assert.deepEqual(result.citations, ['allowed']);
+    assert.deepEqual(result.results[0]?.matched_terms, ['cache', 'invalidation']);
+    assert.equal(result.results[0]?.lexical_match, 'all_terms');
+    assert.equal(result.results[0]?.lexical_coverage, 1);
+    assert.equal(result.results[0]?.weak_match, false);
+    assert.equal(result.confidence, null);
+    assert.equal(result.answer, '');
+    assert.equal(queryCorpus(db, { query: '!!!', mode, lexical_policy: 'all' }).lexical_policy, 'all');
+  }
+});

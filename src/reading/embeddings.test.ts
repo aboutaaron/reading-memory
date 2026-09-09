@@ -106,6 +106,58 @@ test('rank fusion deduplicates shared lexical/vector hits and respects requested
   assertNoVectors(result);
 });
 
+test('strict lexical policy excludes partial keyword candidates while retaining independently qualified semantic candidates', async (t) => {
+  const db = openMemoryDatabase();
+  t.after(() => db.close());
+  seed(db, 'partial-only', { text: 'Cache invalidation strategies.', vector: vector(1) });
+  seed(db, 'semantic', { text: 'Remove obsolete computations.', vector: vector() });
+  const input = { query: 'cache invalidation quasars' };
+  const permissive = await queryHybridCorpus(db, input, embedder);
+  assert.equal(permissive.lexical_policy, 'any');
+  assert.ok(permissive.citations.includes('partial-only'));
+  assert.equal(permissive.results.find(hit => hit.item_id === 'partial-only')?.weak_match, true);
+  const strict = await queryHybridCorpus(db, { ...input, lexical_policy: 'all' }, embedder);
+  assert.equal(strict.lexical_policy, 'all');
+  assert.equal(strict.retrieval_mode, 'hybrid');
+  assert.deepEqual(strict.citations, ['semantic']);
+  assert.equal(strict.results[0]?.lexical_match, 'not_selected');
+  assert.equal(strict.results[0]?.lexical_coverage, null);
+  assert.equal(strict.results[0]?.weak_match, null);
+  assert.equal(strict.confidence, null, 'a guarded vector hit does not establish answer support');
+});
+
+test('strict lexical policy persists through unavailable and failed embedding fallback', async (t) => {
+  const db = openMemoryDatabase();
+  t.after(() => db.close());
+  seed(db, 'partial', { text: 'Cache invalidation strategies.' });
+  for (const provider of [null, { model: MODEL, embed: async () => { throw new Error('fixture failure'); } }]) {
+    const result = await queryHybridCorpus(db, { query: 'cache quasars', lexical_policy: 'all' }, provider);
+    assert.equal(result.retrieval_mode, 'fts');
+    assert.equal(result.lexical_policy, 'all');
+    assert.ok(result.fallback_reason);
+    assert.deepEqual(result.results, []);
+    assert.equal(result.confidence, 0);
+  }
+});
+
+test('semantic-only candidate metadata does not claim absent lexical overlap outside the lexical candidate budget', async (t) => {
+  const db = openMemoryDatabase();
+  t.after(() => db.close());
+  for (let i = 0; i < 25; i++) seed(db, `lexical-${i}`, { text: 'Cache invalidation.', vector: null });
+  seed(db, 'outside-budget', { text: `Cache invalidation. ${'Long supporting context. '.repeat(100)}`, vector: vector() });
+  const lexical = queryCorpus(db, { query: 'cache invalidation', topK: 25 });
+  assert.equal(lexical.results.some(hit => hit.item_id === 'outside-budget'), false);
+  assert.ok(db.prepare('SELECT 1 FROM item_fts WHERE item_fts MATCH ? AND item_id = ?')
+    .get('"cache" AND "invalidation"', 'outside-budget'), 'the semantic-only candidate still matches both lexical terms');
+  const hybrid = await queryHybridCorpus(db, { query: 'cache invalidation', topK: 25 }, embedder);
+  const hit = hybrid.results.find(row => row.item_id === 'outside-budget');
+  assert.ok(hit);
+  assert.equal(hit.lexical_match, 'not_selected');
+  assert.equal(hit.lexical_coverage, null);
+  assert.equal(hit.weak_match, null);
+  assert.deepEqual(hit.matched_terms, []);
+});
+
 test('date, tags, status, latest analysis, model, and self-exclusion filter before the vector candidate limit', (t) => {
   const db = openMemoryDatabase();
   t.after(() => db.close());

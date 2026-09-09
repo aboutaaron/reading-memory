@@ -191,3 +191,72 @@ test('visible fallback skips placeholders and boilerplate before selecting the f
   const first = extractHtml('<div itemprop="articleBody"><p>First substantive body.</p></div><div itemprop="articleBody"><p>Later substantive body.</p></div>');
   assert.equal(first.text, 'First substantive body.');
 });
+
+test('structured fallback recognizes bounded local schema.org vocabulary contexts without remote resolution', () => {
+  for (const context of [
+    { '@vocab': 'https://schema.org/' },
+    ['https://schema.org', { '@vocab': 'https://schema.org/' }],
+    [{ '@vocab': 'http://schema.org/' }]
+  ]) {
+    const result = extractHtml(structured({ ...publicArticle('Locally recognized context.'), '@context': context }));
+    assert.equal(result.text, 'Locally recognized context.');
+    assert.equal(result.extractor, 'structured-article-body');
+  }
+  for (const context of [
+    ['https://schema.org', { '@vocab': 'https://example.com/other' }],
+    { '@vocab': 'https://schema.org/', articleBody: 'https://example.com/description' },
+    ['https://schema.org', 'https://example.com/remote-context'],
+    Array.from({ length: 17 }, () => 'https://schema.org'),
+    [],
+    [['https://schema.org']]
+  ]) assert.equal(extractHtml(structured({ ...publicArticle('Unqualified context body.'), '@context': context })).text, '');
+  const overridden = { '@context': 'https://schema.org', '@graph': [{ ...publicArticle('Overridden nested context.'), '@context': { '@vocab': 'https://example.com/other' } }] };
+  assert.equal(extractHtml(structured(overridden)).text, '');
+});
+
+test('structured fallback uses its matched headline and never a rejected shell heading', () => {
+  const shell = (record: Record<string, unknown> | Record<string, unknown>[]) => structured(record).replace('<body>', '<body><h1>Your privacy</h1>');
+  const titled = extractHtml(shell({ ...publicArticle('Actual public article body.'), headline: '  Actual\n article headline  ' }));
+  assert.equal(titled.title, 'Actual article headline');
+  assert.equal(titled.titleSource, 'article');
+  assert.equal(titled.extractor, 'structured-article-body');
+  const untitled = extractHtml(shell(publicArticle('Actual public article body.')));
+  assert.equal(untitled.title, null);
+  assert.equal(untitled.titleSource, null);
+  const conflicting = extractHtml(shell([
+    { ...publicArticle('Same actual body.'), headline: 'First headline' },
+    { ...publicArticle('Same actual body.'), headline: 'Conflicting headline' }
+  ]));
+  assert.equal(conflicting.text, 'Same actual body.');
+  assert.equal(conflicting.title, null);
+  assert.equal(conflicting.titleSource, null);
+  const bounded = extractHtml(shell({ ...publicArticle('Actual public article body.'), headline: 'a'.repeat(900) }));
+  assert.equal(bounded.title?.length, 500);
+});
+
+test('keeps linked prose inside article paragraphs and quotations while rejecting navigation labels', () => {
+  const sentence = 'Version 2.0 is now available with improved keyboard support.';
+  for (const tag of ['p', 'blockquote']) {
+    for (const text of [sentence, sentence.slice(0, -1)]) {
+      const result = extractHtml(`<article><h1>Release notes</h1><${tag}><a href="https://example.test/release">${text}</a></${tag}></article>`, 'https://example.test/article');
+      assert.ok(result.text.includes(text));
+    }
+  }
+  for (const html of [
+    '<article><h1>Your privacy</h1><p><a href="/privacy">Privacy policy.</a></p><p><a href="/consent">Accept all.</a></p></article>',
+    '<div><a href="/news">Latest stories</a><a href="/opinion">Opinion</a></div>',
+    '<div><a href="/release">Version 2.0 is now available with improved keyboard support</a></div>',
+    '<article><p><a href="/news">Latest stories</a></p></article>'
+  ]) assert.equal(extractHtml(html).text, '');
+});
+
+test('anonymous structured articles cannot borrow attribution from a conflicting explicit page graph', () => {
+  const page = 'https://example.test/article';
+  const container = (pageUrl: string, identity: Record<string, unknown> = {}) => ({ '@context': 'https://schema.org', '@graph': [
+    { '@type': 'WebPage', url: pageUrl },
+    { ...publicArticle('Structured article body.'), ...identity }
+  ] });
+  assert.equal(extractHtml(structured(container('https://example.test/other')), page).text, '');
+  assert.equal(extractHtml(structured(container(page)), page).text, 'Structured article body.');
+  assert.equal(extractHtml(structured(container('https://example.test/other', { mainEntityOfPage: page })), page).text, 'Structured article body.');
+});

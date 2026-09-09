@@ -64,7 +64,7 @@ test('stdio MCP lists typed tools and round-trips capture, recall, annotations, 
   const { client, stderr } = await connect(t, url, token, true);
   const { tools } = await client.listTools();
   assert.deepEqual(tools.map((tool) => tool.name).sort(),
-    ['annotations', 'brief_events', 'brief_guide', 'diagnostics', 'forget', 'get_item', 'health', 'ingest', 'query', 'reanalyze']);
+    ['annotations', 'brief_events', 'brief_guide', 'diagnostics', 'forget', 'get_item', 'health', 'ingest', 'list_failed_items', 'query', 'reanalyze']);
   const query = tools.find((tool) => tool.name === 'query')!;
   assert.ok(query.inputSchema.required?.includes('query'));
   assert.equal(query.annotations?.readOnlyHint, true);
@@ -79,6 +79,12 @@ test('stdio MCP lists typed tools and round-trips capture, recall, annotations, 
   const diagnosticData = envelope(diagnostic).data as { graph: { eligible_relationships: number }; analysis: { stale_items: number } };
   assert.equal(diagnosticData.graph.eligible_relationships, 0);
   assert.equal(diagnosticData.analysis.stale_items, 1);
+  const failedItems = await client.callTool({ name: 'list_failed_items', arguments: { limit: 1, offset: 0 } });
+  assert.equal(failedItems.isError, false);
+  assert.deepEqual((envelope(failedItems).data as { items: unknown[] }).items, []);
+  assert.equal((envelope(failedItems).data as { total: number }).total, 0);
+  const invalidOffset = await client.callTool({ name: 'list_failed_items', arguments: { offset: -1 } });
+  assert.equal(invalidOffset.isError, true);
   const result = await client.callTool({ name: 'query', arguments: { request_id: randomUUID(), query: 'Cobalt caches' } });
   assert.equal(result.isError, false);
   assert.deepEqual((envelope(result).data as { citations: string[] }).citations, [itemId]);

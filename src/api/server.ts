@@ -3,6 +3,7 @@ import { embedAnalysis, embeddingHealth, vectorNeighbors, type Embedder } from '
 import { queryHybridCorpus } from '../reading/hybrid-query.js';
 import { queryGraphCorpus } from '../reading/graph-query.js';
 import { graphDiagnostics } from '../reading/graph-diagnostics.js';
+import { listFailedCaptures } from '../reading/failed-captures.js';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { existsSync, readdirSync, statfsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -148,10 +149,21 @@ export function createReadingApi(
         limiter.check(principal, 'query');
         const limits = url.searchParams.getAll('limit');
         const limit = limits.length ? Number(limits[0]) : 25;
+        if (url.searchParams.get('status') === 'failed') {
+          const offsets = url.searchParams.getAll('offset');
+          const offset = offsets.length ? Number(offsets[0]) : 0;
+          if (url.searchParams.getAll('status').length !== 1 || limits.length > 1 || offsets.length > 1
+            || (offsets.length > 0 && !/^\d+$/.test(offsets[0]!))
+            || [...url.searchParams.keys()].some(key => !['status', 'limit', 'offset'].includes(key))) {
+            throw new ApiError('BAD_REQUEST', 'Use status=failed, optional limit from 1 to 100, and nonnegative integer offset', 400);
+          }
+          const data = listFailedCaptures(db, { limit, offset });
+          return send(res, 200, { ok: true, request_id: requestId, data, error: null });
+        }
         if (url.searchParams.getAll('stale').length !== 1 || url.searchParams.get('stale') !== 'true'
           || limits.length > 1 || !Number.isInteger(limit) || limit < 1 || limit > 100
           || [...url.searchParams.keys()].some((key) => !['stale', 'limit'].includes(key))) {
-          throw new ApiError('BAD_REQUEST', 'Use stale=true and an optional limit from 1 to 100', 400);
+          throw new ApiError('BAD_REQUEST', 'Use stale=true or status=failed with an optional limit from 1 to 100; offset applies only to failed items', 400);
         }
         const data = listStaleItems(db, READING_ANALYSIS_VERSION, config.flueModel, limit);
         return send(res, 200, { ok: true, request_id: requestId, data, error: null });
@@ -313,6 +325,7 @@ function capabilities() {
     supports_reanalyze: true,
     supports_stale_items: true,
     supports_diagnostics: true,
+    supports_failed_items: true,
     analysis_version: READING_ANALYSIS_VERSION,
     query_confidence: 'uncalibrated; null for matches, zero for empty results',
     query_matching: 'meaningful terms across the full question; lexical_policy=any defaults to AND with partial-term OR fallback; all requires every extracted term. Coverage is not answer confidence.',

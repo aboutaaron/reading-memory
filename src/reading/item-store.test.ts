@@ -518,7 +518,8 @@ test('analysis failure activity does not log raw error text', async () => {
 
   assert.doesNotMatch(row.metadata_json, /aaron@example\.com/);
   assert.doesNotMatch(row.metadata_json, /durable recall/);
-  assert.match(row.metadata_json, /TypeError/);
+  assert.equal(JSON.parse(row.metadata_json).error_code, null);
+  assert.equal(JSON.parse(row.metadata_json).retryable, null);
 });
 
 test('same source with changed content creates superseding item', async () => {

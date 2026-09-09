@@ -73,7 +73,7 @@ test('the real npm package boots installed setup and MCP from its shipped compil
     await client.connect(transport);
     const { tools } = await client.listTools();
     assert.deepEqual(tools.map(tool => tool.name).sort(),
-      ['annotations', 'brief_events', 'brief_guide', 'diagnostics', 'forget', 'get_item', 'health', 'ingest', 'query', 'reanalyze']);
+      ['annotations', 'brief_events', 'brief_guide', 'diagnostics', 'forget', 'get_item', 'health', 'ingest', 'list_failed_items', 'query', 'reanalyze']);
     assert.equal(JSON.stringify(tools).includes(token), false);
   } finally { await client.close(); }
   assert.equal(stderr.includes(token), false);

@@ -7,8 +7,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openMemoryDatabase } from '../db/connection.js';
 import { createReadingApi } from './server.js';
+import { ApiError } from './errors.js';
 
-async function fixture(t: import('node:test').TestContext) {
+async function fixture(t: import('node:test').TestContext, options: { fail?: boolean } = {}) {
   const db = openMemoryDatabase();
   const dataDir = mkdtempSync(join(tmpdir(), 'reading-diagnostics-'));
   let providerCalls = 0;
@@ -16,6 +17,7 @@ async function fixture(t: import('node:test').TestContext) {
     dataDir, backupDir: join(dataDir, 'backups'), flueModel: 'openai/test', flueTracePath: null }, db, {
     embedder: null, requestLogger: null, analyzer: async () => {
       providerCalls++;
+      if (options.fail) throw new ApiError('ANALYSIS_FAILED', 'private-provider-detail', 502, true);
       return { summary: 'A retained private proposition.', claims: [], relevance: { score: 0.8, themes: [] },
         recommended_action: 'save', confidence: 0.8, reason: 'Test fixture.', tags: [], relationships: [],
         model: 'test', analysis_version: 'old-version' };
@@ -54,6 +56,33 @@ test('authenticated diagnostics explain coverage without source data, mutations 
   assert.equal((await request('/diagnostics', undefined, 'wrong')).status, 401);
   assert.equal((await request('/diagnostics?include=text')).status, 400);
   assert.equal((await request('/capabilities')).payload.data.supports_diagnostics, true);
+});
+
+test('failed-item HTTP inventory preserves privacy and validates authenticated bounded pagination', async t => {
+  const { request, providerCalls } = await fixture(t, { fail: true });
+  for (const text of ['First retained private proposition.', 'Second retained private proposition.']) {
+    assert.equal((await request('/ingest', { request_id: randomUUID(), source_type: 'text', source: { text } })).status, 502);
+  }
+  const first = await request('/items?status=failed&limit=1');
+  assert.equal(first.status, 200);
+  assert.equal(first.payload.data.total, 2);
+  assert.equal(first.payload.data.next_offset, 1);
+  assert.equal(first.payload.data.items[0].retained_text, true);
+  assert.equal(first.payload.data.items[0].latest_failure.code, 'ANALYSIS_FAILED');
+  assert.equal(first.payload.data.items[0].retry_disposition, 'retryable');
+  const second = await request('/items?status=failed&limit=1&offset=1');
+  assert.equal(second.status, 200);
+  assert.notEqual(first.payload.data.items[0].item_id, second.payload.data.items[0].item_id);
+  assert.equal(second.payload.data.next_offset, null);
+  assert.doesNotMatch(JSON.stringify([first.payload, second.payload]), /retained private proposition|private-provider-detail|test-token|extracted_text/);
+  for (const query of ['status=failed&offset=-1', 'status=failed&offset=9007199254740992', 'status=failed&offset=',
+    'status=failed&offset=1&offset=2', 'status=failed&limit=0', 'status=failed&limit=101',
+    'status=failed&stale=true', 'status=failed&include=text', 'status=failed&status=failed', 'status=indexed']) {
+    assert.equal((await request(`/items?${query}`)).status, 400, query);
+  }
+  assert.equal((await request('/items?status=failed', undefined, 'wrong')).status, 401);
+  assert.equal((await request('/capabilities')).payload.data.supports_failed_items, true);
+  assert.equal(providerCalls(), 2, 'listing never retries analysis');
 });
 
 test('diagnostics share the bounded query rate limit', async t => {

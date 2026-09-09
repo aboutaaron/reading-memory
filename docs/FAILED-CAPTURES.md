@@ -40,4 +40,4 @@ If a retry returns `ITEM_FORGOTTEN`, stop. Never replace its request ID automati
 - For recovery with unchanged extracted content, verify the same item ID is now indexed, source type/URI and provenance still describe the original capture, and an appropriate FTS query retrieves it.
 - When embeddings are enabled, inspect embedding status separately. Embedding failure must not turn a successfully analyzed item into an ingest failure.
 - Capture failures during fetch/extraction can happen before any item is inserted. They are not counted by this failed-item inventory; examine the capturing agent's original failed requests too. Absence from this list is not proof that every attempted capture succeeded.
-- No private production records were recovered by adding these diagnostics. The reported 13 failures still need this live inventory and a source-specific recovery pass.
+- Adding these diagnostics does not recover production records. Use a live inventory and a source-specific recovery pass to establish current outcomes.

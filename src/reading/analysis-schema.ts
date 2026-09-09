@@ -32,9 +32,16 @@ export const ReadingAnalysisSchema = v.strictObject({
 export type ReadingAnalysis = v.InferOutput<typeof ReadingAnalysisSchema>;
 
 
-// Strict provider output requires every key; null evidence means no supported relationship.
+// Provider output selects supplied passages; stored/custom analyzer output keeps quotes.
 const relationshipEntries = ReadingAnalysisSchema.entries.relationships.item.entries;
-export const readingAnalysisJsonSchema = toJsonSchema(v.strictObject({
+export const ProviderReadingAnalysisSchema = v.strictObject({
   ...ReadingAnalysisSchema.entries,
-  relationships: v.array(v.strictObject({ ...relationshipEntries, evidence: v.nullable(relationshipEntries.evidence.wrapped) }))
-})) as { type: 'object'; [key: string]: unknown };
+  relationships: v.array(v.strictObject({
+    ...relationshipEntries,
+    evidence: v.nullable(v.strictObject({
+      source_passage_id: v.string(),
+      target_passage_id: v.string()
+    }))
+  }))
+});
+export const readingAnalysisJsonSchema = toJsonSchema(ProviderReadingAnalysisSchema) as { type: 'object'; [key: string]: unknown };

@@ -2,6 +2,7 @@ import { createEmbeddingProvider } from '../reading/embedding-provider.js';
 import { embedAnalysis, embeddingHealth, vectorNeighbors, type Embedder } from '../reading/embeddings.js';
 import { queryHybridCorpus } from '../reading/hybrid-query.js';
 import { queryGraphCorpus } from '../reading/graph-query.js';
+import { graphDiagnostics } from '../reading/graph-diagnostics.js';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { existsSync, readdirSync, statfsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -77,6 +78,14 @@ export function createReadingApi(
 
       if (req.method === 'GET' && url.pathname === '/capabilities') {
         return send(res, 200, { ok: true, request_id: requestId, data: capabilities(), error: null });
+      }
+
+      if (req.method === 'GET' && url.pathname === '/diagnostics') {
+        limiter.check(principal, 'query');
+        if (url.searchParams.size > 0) throw new ApiError('BAD_REQUEST', 'Diagnostics does not accept query parameters', 400);
+        const data = { analysis: analysisFreshness(db, READING_ANALYSIS_VERSION, config.flueModel),
+          graph: graphDiagnostics(db), embeddings: embeddingHealth(db, embedder?.model ?? null) };
+        return send(res, 200, { ok: true, request_id: requestId, data, error: null });
       }
 
       if (req.method === 'POST' && url.pathname === '/ingest') {
@@ -303,6 +312,7 @@ function capabilities() {
     supports_forget: true,
     supports_reanalyze: true,
     supports_stale_items: true,
+    supports_diagnostics: true,
     analysis_version: READING_ANALYSIS_VERSION,
     query_confidence: 'uncalibrated; null for matches, zero for empty results',
     query_matching: 'meaningful terms across the full question; lexical_policy=any defaults to AND with partial-term OR fallback; all requires every extracted term. Coverage is not answer confidence.',

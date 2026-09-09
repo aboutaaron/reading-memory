@@ -6,6 +6,7 @@ type MaintenanceOptions = {
   baseUrl: string;
   token: string;
   limit: number;
+  dryRun?: boolean;
   fetcher?: typeof fetch;
   wait?: (ms: number) => Promise<void>;
   report?: (event: { item_id: string; status: 'reanalyzed' | 'failed' }) => void;
@@ -42,11 +43,14 @@ export async function reanalyzeStale(options: MaintenanceOptions) {
       await wait(retryMs);
     }
   };
-  const result = await request(`/items?stale=true&limit=${options.limit}`) as { items?: Array<{ item_id?: unknown }> };
+  const result = await request(`/items?stale=true&limit=${options.limit}`) as { items?: Array<{ item_id?: unknown; analysis_version?: unknown; model?: unknown; stale_reasons?: unknown }> };
   if (!Array.isArray(result.items) || result.items.some((item) => typeof item.item_id !== 'string')) {
     throw new MaintenanceError('Invalid stale-item response');
   }
   const items = result.items.slice(0, options.limit);
+  if (options.dryRun) return { selected: items.length, completed: 0, failed: 0, dry_run: true,
+    items: items.map(item => ({ item_id: item.item_id, analysis_version: item.analysis_version,
+      model: item.model, stale_reasons: item.stale_reasons })) };
   let completed = 0;
   let failed = 0;
   for (let index = 0; index < items.length; index += 1) {
@@ -67,21 +71,28 @@ export async function reanalyzeStale(options: MaintenanceOptions) {
 
 class MaintenanceError extends Error {}
 
-export function parseReanalyzeArgs(args: string[]) {
-  if (args.length !== 3 || args[0] !== '--stale' || args[1] !== '--limit' || !/^\d+$/.test(args[2]!)) {
-    throw new Error('Usage: npm run reanalyze -- --stale --limit N (1-100)');
+export function parseReanalyzeOptions(args: string[]) {
+  const modeFlags = args.filter(arg => arg === '--dry-run' || arg === '--apply');
+  const core = args.filter(arg => arg !== '--dry-run' && arg !== '--apply');
+  if (modeFlags.length > 1 || core.length !== 3 || core[0] !== '--stale' || core[1] !== '--limit' || !/^\d+$/.test(core[2]!)) {
+    throw new Error('Usage: npm run reanalyze -- --stale --limit N [--dry-run | --apply] (1-100); omitting mode applies for compatibility');
   }
-  const limit = Number(args[2]);
+  const limit = Number(core[2]);
   if (limit < 1 || limit > 100) throw new Error('limit must be between 1 and 100');
-  return limit;
+  return { limit, dryRun: modeFlags[0] === '--dry-run' };
+}
+
+/** Kept for callers that only consume the historical numeric limit. */
+export function parseReanalyzeArgs(args: string[]) {
+  return parseReanalyzeOptions(args).limit;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
-    const limit = parseReanalyzeArgs(process.argv.slice(2));
+    const { limit, dryRun } = parseReanalyzeOptions(process.argv.slice(2));
     const config = loadConfig();
     const host = config.host === '::1' ? '[::1]' : config.host;
-    const result = await reanalyzeStale({ baseUrl: `http://${host}:${config.port}`, token: config.authToken, limit,
+    const result = await reanalyzeStale({ baseUrl: `http://${host}:${config.port}`, token: config.authToken, limit, dryRun,
       report: (event) => process.stdout.write(`${JSON.stringify(event)}\n`) });
     process.stdout.write(`${JSON.stringify(result)}\n`);
     if (result.failed > 0) process.exitCode = 1;

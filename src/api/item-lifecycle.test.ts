@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { openMemoryDatabase } from '../db/connection.js';
 import { createReadingApi } from './server.js';
+import { ApiError } from './errors.js';
 
 async function fixture(t: import('node:test').TestContext, options: Parameters<typeof createReadingApi>[2] = {}) {
   const db = openMemoryDatabase();
@@ -44,6 +45,24 @@ test('forget API requires auth, advertises capability, rejects reason text and s
   for (let i = 0; i < 6; i += 1) assert.equal((await request('DELETE', path)).status, 404);
   assert.equal((await request('DELETE', path)).status, 429);
   assert.doesNotMatch(JSON.stringify((await request('GET', '/activity')).payload), /private/);
+});
+
+for (const status of [502, 504]) test(`forgotten failed ingest cannot be recreated by its automatic ${status} retry`, async (t) => {
+  let calls = 0;
+  const { db, request } = await fixture(t, { analyzer: async () => {
+    calls += 1;
+    throw new ApiError(status === 502 ? 'ANALYSIS_FAILED' : 'TIMEOUT', 'Retryable provider failure', status, true);
+  } });
+  const body = { request_id: randomUUID(), source_type: 'text', source: { text: 'Forgotten failed reading stays deleted.' } };
+  assert.equal((await request('POST', '/ingest', body)).status, status);
+  const itemId = db.prepare("SELECT id FROM items WHERE status = 'failed'").get()?.id as string;
+  assert.ok(itemId);
+  assert.equal((await request('DELETE', `/items/${itemId}`)).status, 200);
+  const retry = await request('POST', '/ingest', body);
+  assert.equal(retry.status, 410);
+  assert.equal(retry.payload.error.code, 'ITEM_FORGOTTEN');
+  assert.equal(calls, 1);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM items').get()?.n, 0);
 });
 
 test('reanalysis API uses stored source and reader context, validates input and reports current model/version staleness', async (t) => {

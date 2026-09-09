@@ -37,6 +37,10 @@ export function backupDatabase(dbPath, outPath) {
     // an existing destination (including a symlink) can never be overwritten.
     linkSync(temporary, destination);
     unlinkSync(temporary); temporary = undefined;
+    // Persist the published name and temporary-name removal before reporting
+    // success: syncing the snapshot alone does not make directory entries durable.
+    const directoryFd = openSync(directory, 'r');
+    try { fsyncSync(directoryFd); } finally { closeSync(directoryFd); }
     return { ok: true, source: sourcePath, destination, size_bytes: statSync(destination).size, integrity: 'ok' };
   } finally {
     if (temporary && existsSync(temporary)) unlinkSync(temporary);

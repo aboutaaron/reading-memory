@@ -147,7 +147,7 @@ Supported source types: `url`, `text`, `pdf_url`. URL and PDF ingestion require 
 
 ### Usage feedback
 
-`POST /brief-events` also accepts `event_kind: "cited"` with `included_bool: true`. Record this only after a source contributed to a finalized answer. Use `brief_date` for the UTC date of use and a stable answer ID in `source_context` to distinguish separate uses while deduplicating retries. Include a rationale identifying the supported claim. A `cited` event cannot set `resurface_after`; it neither consumes a brief appearance nor clears or creates a schedule. Use a regular brief event for scheduling. Do not double-record a brief inclusion as a citation for the same use.
+`POST /brief-events` also accepts `event_kind: "cited"` with `included_bool: true`. Record this only after a source contributed to a finalized answer. Use `brief_date` for the UTC date of use. Every `cited` event requires a nonblank `source_context` containing a stable answer ID: use a different ID for each distinct answer and reuse it for retries. Other brief event kinds keep `source_context` optional. Include a rationale identifying the supported claim. A `cited` event cannot set `resurface_after`; it neither consumes a brief appearance nor clears or creates a schedule. Use a regular brief event for scheduling. Do not double-record a brief inclusion as a citation for the same use.
 
 `POST /query` accepts optional `mode: "fts"` (default) or `"fts+usage"`; `/capabilities.query_modes` advertises both. Both modes retain lexical matching, AND/OR fallback, filters, and empty-result abstention. Queries never write usage events. Usage adjustment applies before the result limit, so a frequently useful match can rank ahead of an otherwise equal match anywhere in the filtered corpus.
 
@@ -289,16 +289,20 @@ Expected healthy signals:
 - `journalctl --user -u reading-memory.service` contains metadata events only, not request bodies or extracted text.
 - `npm run eval:reading` passes before ranking, dedupe, or brief-guide changes are accepted. Its analyses are canned; model changes additionally require reviewed live-model evaluation.
 
-Rollback:
+Before a release first starts, stop the service and run `./scripts/backup-sqlite.sh` with the service's database environment. Record the previous release commit, the explicit backup path, and its `PRAGMA user_version`; verify the snapshot with `PRAGMA integrity_check`. Retain this pre-upgrade snapshot outside the daily backup's 30-day rotation for as long as rollback is needed. The SQLite backup captures committed WAL state; a plain copy of a live database does not.
+
+Rollback across a schema upgrade requires restoring that pre-upgrade snapshot. Schema v5 and later cannot be opened by the v4 service: checking out old code alone leaves startup failing. Stop the service and preserve a separate verified snapshot of the upgraded database before changing code. Then build the previous release and restore the explicit compatible backup before restarting:
 
 ```bash
 systemctl --user stop reading-memory.service
 git -C ~/reading-memory checkout <previous-release>
 cd ~/reading-memory && npm ci && npm run build
-systemctl --user start reading-memory.service
+./scripts/restore-from-backup.sh /absolute/path/to/pre-upgrade.sqlite
 ```
 
-Migration failure behavior: migrations run inside a transaction and use `PRAGMA user_version`. If migration fails, startup fails before serving traffic and leaves the prior DB state intact.
+The restore script restarts the installed runner only after restoration. Use the corresponding LaunchAgent stop command on macOS. Do not restart newer code after restoring the old snapshot, because it would migrate the database again. Verify `/health` and an authenticated smoke request after rollback. Restoring a pre-upgrade snapshot discards subsequent writes from the active corpus; retain the separate upgraded snapshot for recovery. If no compatible pre-upgrade snapshot exists, keep the newer service version and repair forward rather than lowering `user_version` by hand. A checkout-only rollback is appropriate only when both releases support the existing schema.
+
+Migration failure behavior: migrations run inside a transaction and use `PRAGMA user_version`. If migration fails, startup fails before serving traffic and leaves the prior DB state intact. Successful migrations are not automatically downgraded by a later checkout.
 
 ## Inspect Analysis Activity
 
@@ -322,7 +326,7 @@ Reading Memory sends one bounded structured request through an official provider
 
 `DELETE /items/:id` requires bearer authentication and shares the ingest rate limit. It accepts no body or query parameters. It deletes canonical item content, analysis history, tags, relationships, reader notes, brief events, and FTS in one transaction; newer items' `supersedes_item_id` references become null. Active analysis returns 409 `ANALYSIS_IN_PROGRESS`; a missing item returns 404. Success returns `{item_id, deleted: true}`. The activity log retains only the content hash and operational identifiers, never a free-form reason.
 
-Idempotency snapshots containing the item (including other items' connection evidence and multi-item brief batches) become content-free tombstones. Their original request IDs return 410 `ITEM_FORGOTTEN`, preventing accidental replay or recapture. A fresh intentional capture uses a new request ID and logs `ingest.previously_forgotten`. Forgetting does not rewrite separate backup files.
+Idempotency snapshots containing the item (including other items' connection evidence and multi-item brief batches) become content-free tombstones. Request IDs from failed or interrupted ingest attempts are also recovered from their durable start events and retired. These tombstones do not expire with ordinary successful-response caching. Their original request IDs return 410 `ITEM_FORGOTTEN`, preventing accidental replay or recapture. A fresh intentional capture uses a new request ID and logs `ingest.previously_forgotten`. Forgetting does not rewrite separate backup files.
 
 
 ### Refresh stored analysis

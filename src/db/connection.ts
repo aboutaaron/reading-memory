@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { privateDatabasePath } from '../../scripts/private-files.mjs';
+import { privateDatabasePath } from '../filesystem/private-files.js';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';

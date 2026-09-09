@@ -80,7 +80,7 @@ CREATE TABLE IF NOT EXISTS brief_events (
   id TEXT PRIMARY KEY,
   item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
   brief_date TEXT NOT NULL,
-  event_kind TEXT NOT NULL CHECK (event_kind IN ('included', 'skipped', 'resurfaced')),
+  event_kind TEXT NOT NULL CHECK (event_kind IN ('included', 'skipped', 'resurfaced', 'cited')),
   included_bool INTEGER NOT NULL CHECK (included_bool IN (0, 1)),
   rationale TEXT NOT NULL,
   source_context TEXT NOT NULL DEFAULT '',

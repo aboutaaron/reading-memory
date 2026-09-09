@@ -42,6 +42,7 @@ export const IngestRequestSchema = v.variant('source_type', [
 
 export const QueryRequestSchema = v.object({
   request_id: RequestIdSchema,
+  mode: v.optional(v.picklist(['fts', 'fts+usage'])),
   query: v.pipe(v.string(), v.minLength(1), v.maxLength(4000)),
   filters: v.optional(v.object({
     since: v.optional(v.string()),
@@ -57,15 +58,26 @@ export const BriefGuideRequestSchema = v.object({
   focus: v.optional(v.array(v.string()))
 });
 
-export const BriefEventSchema = v.object({
+const BriefEventFields = {
   item_id: v.pipe(v.string(), v.minLength(1)),
   brief_date: DateSchema,
-  event_kind: v.picklist(['included', 'skipped', 'resurfaced']),
   included_bool: v.boolean(),
   rationale: v.pipe(v.string(), v.minLength(1)),
-  source_context: v.optional(v.string()),
   resurface_after: v.optional(v.nullable(DateSchema))
-});
+};
+
+export const BriefEventSchema = v.variant('event_kind', [
+  v.object({
+    ...BriefEventFields,
+    event_kind: v.picklist(['included', 'skipped', 'resurfaced']),
+    source_context: v.optional(v.string())
+  }),
+  v.object({
+    ...BriefEventFields,
+    event_kind: v.literal('cited'),
+    source_context: v.pipe(v.string(), v.regex(/\S/, 'cited events require a nonblank source_context identifying the answer'))
+  })
+]);
 
 export const BriefEventsRequestSchema = v.object({
   request_id: RequestIdSchema,

@@ -145,6 +145,18 @@ Supported source types: `url`, `text`, `pdf_url`. URL and PDF ingestion require 
 
 `POST /brief-events` is idempotent by `request_id` and guarded against equivalent duplicate events for the same item/date/kind/source context.
 
+### Usage feedback
+
+`POST /brief-events` also accepts `event_kind: "cited"` with `included_bool: true`. Record this only after a source contributed to a finalized answer. Use `brief_date` for the UTC date of use. Every `cited` event requires a nonblank `source_context` containing a stable answer ID: use a different ID for each distinct answer and reuse it for retries. Other brief event kinds keep `source_context` optional. Include a rationale identifying the supported claim. A `cited` event cannot set `resurface_after`; it neither consumes a brief appearance nor clears or creates a schedule. Use a regular brief event for scheduling. Do not double-record a brief inclusion as a citation for the same use.
+
+`POST /query` accepts optional `mode: "fts"` (default) or `"fts+usage"`; `/capabilities.query_modes` advertises both. Both modes retain lexical matching, AND/OR fallback, filters, and empty-result abstention. Queries never write usage events. Usage adjustment applies before the result limit, so a frequently useful match can rank ahead of an otherwise equal match anywhere in the filtered corpus.
+
+In usage mode, `results[].usage` exposes `lexical_score`, `usage_count`, `last_used_at`, `skipped_count`, `boost`, `unused_decay`, and `multiplier`. The final `score` is `lexical_score * multiplier`. Each `included` or `cited` event contributes +1 and each `skipped` event contributes -1, weighted by `1 / (1 + age_in_days / 30)` from its event date. Resurfaced events remain brief lifecycle records and do not contribute to this score. The bounded boost is `0.2 * balance / (1 + abs(balance))`. With no positive use, a latest relevance score below 0.35 adds a decay of zero through day 30 after ingestion, rising linearly to 0.1 by day 90. Missing relevance does not justify decay. Multipliers remain between 0.7 and 1.2. No amount of use can produce a result without a lexical match.
+
+`GET /items/:id` includes `usage_count` (number of distinct stored included/cited events) and `last_used_at` (the latest positive event's recorded `created_at`, or null). Neither field estimates unrecorded use. Future event dates and records created after the as-of clock are excluded. Event counts, timestamps, and adjusted scores describe reported use, not reader agreement or calibrated answer confidence.
+
+After three consecutive distinct skipped brief dates, `/brief-guide` demotes an otherwise eligible item and exposes `effective_confidence` at half its original `confidence`, with `consecutive_skips` and an explanation. Multiple skipped contexts on the same day count once; an included/resurfaced date interrupts the streak. Cited events do not affect the streak. An explicit due schedule overrides the demotion. Original analysis data remains unchanged.
+
 ### Operational activity
 
 Use authenticated `GET /activity` to inspect recent operational history, such as ingestion outcomes and annotation creation, while debugging. Reading recall and evidence retrieval belong to `POST /query`; activity events are operational metadata, not semantic search results.

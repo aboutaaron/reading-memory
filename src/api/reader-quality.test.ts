@@ -212,3 +212,80 @@ test('exhausted ingest quota does not block reader annotations', async (t) => {
   });
   assert.equal(annotation.status, 200);
 });
+
+
+test('HTTP supports explicit usage mode and cited events while rejecting incompatible citation fields', async (t) => {
+  const { post, get } = await fixture(t);
+  const ingest = await post('/ingest', textRequest());
+  const itemId = ingest.payload.data.item_id;
+  const today = new Date().toISOString().slice(0, 10);
+  const cited = { request_id: randomUUID(), events: [{ item_id: itemId, brief_date: today, event_kind: 'cited',
+    included_bool: true, rationale: 'Used to explain dependency invalidation.', source_context: 'answer:quality-test' }] };
+  assert.equal((await post('/brief-events', cited, 'wrong')).status, 401);
+  const created = await post('/brief-events', cited);
+  assert.equal(created.status, 200); assert.equal(created.payload.data.events[0].event_kind, 'cited');
+  assert.equal((await post('/brief-events', cited)).payload.data.dedupe_status, 'idempotent_replay');
+  const item = (await get(`/items/${itemId}`)).data;
+  assert.equal(item.usage_count, 1);
+  assert.equal(item.last_used_at, created.payload.data.events[0].created_at);
+  const query = await post('/query', { request_id: randomUUID(), query: 'cache invalidation', mode: 'fts+usage' });
+  assert.equal(query.status, 200); assert.equal(query.payload.data.retrieval_mode, 'fts+usage');
+  assert.equal(query.payload.data.results[0].usage.usage_count, 1);
+  const caps = (await get('/capabilities')).data;
+  assert.ok(caps.query_modes.includes('fts+usage')); assert.ok(caps.brief_event_kinds.includes('cited'));
+  assert.equal((await post('/query', { request_id: randomUUID(), query: 'cache', mode: 'unknown' })).status, 400);
+  for (const patch of [{ included_bool: false }, { resurface_after: today }, { event_kind: 'retrieved' }]) {
+    assert.equal((await post('/brief-events', { request_id: randomUUID(), events: [{ ...cited.events[0], ...patch }] })).status, 400);
+  }
+});
+
+
+test('HTTP citations require an answer context and count distinct answers without duplicate retries', async t => {
+  const { db, post, get } = await fixture(t);
+  const ingest = await post('/ingest', textRequest());
+  const itemId = ingest.payload.data.item_id;
+  const today = new Date().toISOString().slice(0, 10);
+  const event = { item_id: itemId, brief_date: today, event_kind: 'cited', included_bool: true,
+    rationale: 'Supports the answer about cache ownership.' };
+  for (const sourceContext of [undefined, '', ' \t\n', '\u00a0']) {
+    const requestId = randomUUID();
+    const response = await post('/brief-events', { request_id: requestId,
+      events: [{ ...event, ...(sourceContext === undefined ? {} : { source_context: sourceContext }) }] });
+    assert.equal(response.status, 400);
+    assert.equal(response.payload.error.code, 'BAD_REQUEST');
+    assert.equal(db.prepare('SELECT 1 FROM idempotency_keys WHERE request_id = ?').get(requestId), undefined);
+  }
+  assert.equal((await get(`/items/${itemId}`)).data.usage_count, 0);
+  const first = { request_id: randomUUID(), events: [{ ...event, source_context: 'answer:first' }] };
+  const firstResponse = await post('/brief-events', first);
+  assert.equal(firstResponse.status, 200);
+  assert.equal(firstResponse.payload.data.dedupe_status, 'created');
+  const second = await post('/brief-events', { request_id: randomUUID(),
+    events: [{ ...event, source_context: 'answer:second' }] });
+  assert.equal(second.status, 200);
+  assert.notEqual(second.payload.data.events[0].id, firstResponse.payload.data.events[0].id);
+  assert.equal((await post('/brief-events', first)).payload.data.dedupe_status, 'idempotent_replay');
+  const duplicate = await post('/brief-events', { ...first, request_id: randomUUID() });
+  assert.equal(duplicate.payload.data.dedupe_status, 'existing');
+  assert.equal(duplicate.payload.data.events[0].id, firstResponse.payload.data.events[0].id);
+  assert.equal((await get(`/items/${itemId}`)).data.usage_count, 2);
+  assert.equal(db.prepare("SELECT count(*) AS n FROM brief_events WHERE event_kind = 'cited'").get()?.n, 2);
+});
+
+test('HTTP legacy brief events retain optional or blank source contexts', async t => {
+  const { post } = await fixture(t);
+  const ingest = await post('/ingest', textRequest());
+  const itemId = ingest.payload.data.item_id;
+  for (const eventKind of ['included', 'skipped', 'resurfaced']) {
+    for (const sourceContext of [undefined, '']) {
+      const response = await post('/brief-events', { request_id: randomUUID(), events: [{
+        item_id: itemId, brief_date: '2026-09-09', event_kind: eventKind,
+        included_bool: eventKind !== 'skipped', rationale: 'Finalized brief outcome.',
+        ...(sourceContext === undefined ? {} : { source_context: sourceContext })
+      }] });
+      assert.equal(response.status, 200);
+      assert.equal(response.payload.data.events[0].source_context, '');
+      assert.equal(response.payload.data.dedupe_status, sourceContext === undefined ? 'created' : 'existing');
+    }
+  }
+});

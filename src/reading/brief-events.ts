@@ -10,7 +10,7 @@ export type BriefEventRecord = {
   id: string;
   item_id: string;
   brief_date: string;
-  event_kind: 'included' | 'skipped' | 'resurfaced';
+  event_kind: 'included' | 'skipped' | 'resurfaced' | 'cited';
   included_bool: boolean;
   rationale: string;
   source_context: string;
@@ -65,6 +65,12 @@ export class BriefEventStore {
       let existingCount = 0;
       for (const event of input.body.events) {
         assertEventKindMatchesIncluded(event.event_kind, event.included_bool);
+        if (event.event_kind === 'cited' && !event.source_context?.trim()) {
+          throw new ApiError('BAD_REQUEST', 'cited events require a nonblank source_context identifying the answer', 400);
+        }
+        if (event.event_kind === 'cited' && event.resurface_after != null) {
+          throw new ApiError('BAD_REQUEST', 'cited events cannot schedule a brief; use a brief event to resurface an item', 400);
+        }
         this.assertItemExists(event.item_id);
         const sourceContext = event.source_context ?? '';
         const existing = this.findExisting(event.item_id, event.brief_date, event.event_kind, sourceContext);
@@ -164,7 +170,7 @@ function assertEventKindMatchesIncluded(eventKind: string, included: boolean) {
     throw new ApiError('BAD_REQUEST', 'skipped brief events must set included_bool to false', 400);
   }
   if (eventKind !== 'skipped' && !included) {
-    throw new ApiError('BAD_REQUEST', 'included or resurfaced brief events must set included_bool to true', 400);
+    throw new ApiError('BAD_REQUEST', 'included, resurfaced, or cited events must set included_bool to true', 400);
   }
 }
 

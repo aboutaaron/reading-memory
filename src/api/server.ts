@@ -18,6 +18,7 @@ import {
   type ReadingAnalyzer
 } from '../reading/flue-agent.js';
 import { extractSource, payloadHash } from '../reading/extract-source.js';
+import { PDF_PARSE_LIMITS } from '../ingest/extract-pdf.js';
 import { briefGuide } from '../reading/brief-guide.js';
 import { getItem, queryCorpus } from '../reading/corpus-query.js';
 import { BriefEventStore, briefEventsPayloadHash } from '../reading/brief-events.js';
@@ -264,6 +265,9 @@ function capabilities() {
     max_text_chars: LIMITS.maxTextChars,
     max_url_bytes: LIMITS.maxUrlBytes,
     max_pdf_pages: LIMITS.maxPdfPages,
+    max_pdf_bytes: LIMITS.maxPdfBytes,
+    max_pdf_extracted_chars: PDF_PARSE_LIMITS.maxOutputChars,
+    pdf_parse_timeout_seconds: PDF_PARSE_LIMITS.timeoutMs / 1000,
     rate_limits: { ingest_per_minute: 10, query_per_minute: 30, annotation_per_minute: 30 }
   };
 }

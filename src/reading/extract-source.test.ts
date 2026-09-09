@@ -99,3 +99,18 @@ test('rejects empty captured text and empty extracted HTML', async () => {
   await assert.rejects(extractSource({ request_id: REQUEST_ID, source_type: 'text', source: { text: ' \n\t' } }), (error: unknown) => error instanceof ApiError && error.code === 'BAD_REQUEST');
   await assert.rejects(extractSource({ request_id: REQUEST_ID, source_type: 'url', source: { url: 'https://example.com/empty' } }, undefined, { fetchUrl: async () => fetched('<html><body><script>Only code</script></body></html>') }), (error: unknown) => error instanceof ApiError && error.code === 'FETCH_FAILED');
 });
+
+
+test('propagates the extraction AbortSignal to PDF parsing for URL and PDF sources', async () => {
+  for (const type of ['url', 'pdf_url'] as const) {
+    const controller = new AbortController();
+    const source = await extractSource({ request_id: REQUEST_ID, source_type: type, source: { url: 'https://example.com/paper.pdf' } }, controller.signal, {
+      fetchUrl: async () => fetched('fake PDF bytes', 'application/pdf'),
+      extractPdfText: async (_bytes, signal) => {
+        assert.equal(signal, controller.signal);
+        return { text: 'Paper text.', pages: 1, title: null, author: null };
+      }
+    });
+    assert.equal(source.provenance.extractor, 'pdf');
+  }
+});

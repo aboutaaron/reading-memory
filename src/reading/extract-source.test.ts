@@ -114,3 +114,38 @@ test('propagates the extraction AbortSignal to PDF parsing for URL and PDF sourc
     assert.equal(source.provenance.extractor, 'pdf');
   }
 });
+
+test('rejects nonempty consent shells with a content-free actionable extraction error', async () => {
+  const html = '<main><h1>Your privacy</h1><p>We use cookies to personalize content.</p><button>Accept all</button></main>';
+  await assert.rejects(extractSource({ request_id: REQUEST_ID, source_type: 'url', source: { url: 'https://example.com/consent' } }, undefined,
+    { fetchUrl: async () => fetched(html) }), (error: unknown) => {
+      assert.ok(error instanceof ApiError);
+      assert.equal(error.code, 'FETCH_FAILED');
+      assert.match(error.message, /no usable article text/);
+      assert.doesNotMatch(error.message, /personalize|example\.com/);
+      return true;
+    });
+});
+
+test('structured fallback preserves requested and final URL provenance, fetch bounds, and unknown completeness', async () => {
+  const controller = new AbortController();
+  const html = `<html><head><script type="application/ld+json">${JSON.stringify({ '@context': 'https://schema.org', '@type': 'Article', isAccessibleForFree: true, articleBody: 'Public article evidence from the fetched response.' })}</script></head><body></body></html>`;
+  const original = 'https://example.com/start?utm_source=test#fragment';
+  const source = await extractSource({ request_id: REQUEST_ID, source_type: 'url', source: { url: original } }, controller.signal, {
+    fetchUrl: async (url, options) => {
+      assert.equal(url, original);
+      assert.equal(options?.signal, controller.signal);
+      assert.equal(options?.maxBytes, LIMITS.maxUrlBytes);
+      return fetched(html);
+    }
+  });
+  assert.equal(source.sourceUri, original);
+  assert.equal(source.canonicalUrl, 'https://example.com/start');
+  assert.equal(source.finalUrl, 'https://example.com/article');
+  assert.equal(source.provenance.original_url, original);
+  assert.equal(source.provenance.final_url, 'https://example.com/article');
+  assert.equal(source.provenance.extractor, 'structured-article-body');
+  assert.equal(source.provenance.extraction_completeness, 'unknown');
+  assert.equal(source.truncated, false);
+  assert.match(source.rawBytesHash!, /^sha256:/);
+});

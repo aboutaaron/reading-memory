@@ -31,7 +31,7 @@ When embeddings are available, prior-source analysis context and ingest-related-
 
 ## Storage and maintenance
 
-Schema v7 adds `item_embeddings`, an ordinary SQLite table linked to each item and its latest analysis, storing the model, dimensions, input digest and vector. Provider calls run outside write transactions; successful vectors persist with the corresponding analysis. Failed optional indexing leaves a missing projection. Reanalysis replaces or clears the projection; older analysis vectors cannot silently match the current model. Title maintenance invalidates outdated embeddings.
+Schema v7 adds `item_embeddings`, an ordinary SQLite table linked to each item and its latest analysis, storing the model, dimensions, input digest and vector. Provider calls run outside write transactions; successful vectors persist with the corresponding analysis. Embedding generation or canonical-write failures leave a missing projection. A failed derived-index write preserves the canonical vector and disables vector retrieval on that connection; a later successful index rebuild can reuse the saved vector without another provider call. Reanalysis replaces or clears the projection; older analysis vectors cannot silently match the current model. Title maintenance invalidates outdated embeddings.
 
 `item_vec` is a derived `vec0` virtual table. The service loads only the packaged sqlite-vec extension and then disables extension loading. Startup rebuilds the vector index from canonical rows. Extension/platform or rebuild failures leave the corpus and full-text retrieval usable; health reports the unavailable vector index. No model download or provider call happens during startup.
 

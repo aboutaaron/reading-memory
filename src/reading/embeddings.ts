@@ -67,17 +67,30 @@ export function deleteEmbedding(db: Database, itemId: string) {
 export function saveEmbedding(db: Database, itemId: string, analysisId: string, embedding: Embedding | null) {
   deleteEmbedding(db, itemId);
   if (!embedding) return;
+  let bytes: Uint8Array;
   db.exec('SAVEPOINT optional_embedding');
   try {
-    const bytes = validateVector(embedding.vector);
+    bytes = validateVector(embedding.vector);
     db.prepare(`INSERT INTO item_embeddings(item_id, analysis_id, model, dimensions, input_hash, embedding, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)`).run(itemId, analysisId, embedding.model, EMBEDDING_DIMENSIONS,
       embedding.inputHash, bytes, new Date().toISOString());
-    if (vectorIndexAvailable(db)) db.prepare('INSERT INTO item_vec(item_id, embedding) VALUES (?, ?)').run(itemId, bytes);
     db.exec('RELEASE optional_embedding');
   } catch {
     db.exec('ROLLBACK TO optional_embedding');
     db.exec('RELEASE optional_embedding');
+    return;
+  }
+  if (!vectorIndexAvailable(db)) return;
+  // The paid provider result is canonical; a damaged derived index must not
+  // discard it. Both savepoints still belong to the caller's analysis transaction.
+  db.exec('SAVEPOINT optional_vector_insert');
+  try {
+    db.prepare('INSERT INTO item_vec(item_id, embedding) VALUES (?, ?)').run(itemId, bytes);
+    db.exec('RELEASE optional_vector_insert');
+  } catch {
+    db.exec('ROLLBACK TO optional_vector_insert');
+    db.exec('RELEASE optional_vector_insert');
+    disableVectorIndex(db);
   }
 }
 

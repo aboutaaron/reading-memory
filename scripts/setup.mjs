@@ -3,10 +3,12 @@ import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileS
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 
 import { mergeEnvFile, parseEnvKeys } from './lib/env-file.mjs';
+import { loadMcpConfig } from './lib/mcp-config.mjs';
 
-const root = resolve(dirname(new URL(import.meta.url).pathname), '..');
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
 
 function usage() {
@@ -17,9 +19,11 @@ Usage:
   reading-memory setup --target openclaw
   reading-memory setup --target claude-code
   reading-memory setup --target env
+  reading-memory setup --target mcp
+  reading-memory mcp [--env-file <path>]
 
 Options:
-  --target <codex|openclaw|claude-code|env>
+  --target <codex|openclaw|claude-code|env|mcp>
                                 Install target. Default: codex.
   --url <url>                    Service URL. Default: http://127.0.0.1:4727.
   --env-file <path>              Env file path. Default: ~/.reading-api/env.
@@ -135,7 +139,7 @@ function setup() {
   }
 
   const target = readOption('--target', 'codex');
-  if (!['codex', 'openclaw', 'claude-code', 'env'].includes(target)) {
+  if (!['codex', 'openclaw', 'claude-code', 'env', 'mcp'].includes(target)) {
     throw new Error(`Unsupported target: ${target}`);
   }
 
@@ -164,7 +168,7 @@ function setup() {
   const env = mergeEnvFile(existingContent, ownedValues);
 
   writePrivateFile(envFile, env, dryRun);
-  const skillPath = target === 'env' ? null : copySkill(target, dryRun);
+  const skillPath = ['env', 'mcp'].includes(target) ? null : copySkill(target, dryRun);
   const commandPaths = copyCommands(target, dryRun);
 
   console.log(`Reading Memory setup ${dryRun ? 'checked' : 'complete'}.
@@ -184,11 +188,28 @@ Agent environment:
 Service:
   Start Reading Memory with the same env file loaded before your agent calls it.
 `);
+  if (target === 'mcp') {
+    // Reuse this installation. Secrets stay in the private env file and are
+    // read at launch, never copied into the client configuration or output.
+    console.log('MCP client configuration (start the HTTP service separately):');
+    console.log(JSON.stringify({ mcpServers: { 'reading-memory': {
+      command: process.execPath,
+      args: [fileURLToPath(import.meta.url), 'mcp', '--env-file', envFile]
+    } } }, null, 2));
+  }
 }
 
 try {
-  setup();
+  if (args[0] === 'mcp' && !hasFlag('--help') && !hasFlag('-h')) {
+    const { startReadingMcpServer } = await import('../dist/src/mcp/server.js');
+    const envFile = readOption('--env-file');
+    await startReadingMcpServer(loadMcpConfig(envFile ? resolve(expandHome(envFile)) : undefined));
+  } else {
+    setup();
+  }
 } catch (error) {
-  console.error(error instanceof Error ? error.message : String(error));
+  console.error(args[0] === 'mcp'
+    ? 'Reading Memory MCP could not start. Run npm install and npm run build, then check the env file, loopback URL, and bearer token.'
+    : error instanceof Error ? error.message : String(error));
   process.exit(1);
 }

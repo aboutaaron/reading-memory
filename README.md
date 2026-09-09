@@ -27,6 +27,7 @@ npx github:aboutaaron/reading-memory setup --target codex
 npx github:aboutaaron/reading-memory setup --target openclaw
 npx github:aboutaaron/reading-memory setup --target claude-code
 npx github:aboutaaron/reading-memory setup --target env
+npx github:aboutaaron/reading-memory setup --target mcp
 ```
 
 Use `--dry-run` to inspect the files it would create.
@@ -80,6 +81,33 @@ URL/PDF captures extract available title, author, publisher, and publication dat
 Schema version 6 adds cited-event support while preserving brief history. Version 3 added durable judgment fields and rebuilds the derived search index. Legacy truncated hashes are prefixed with `legacy-prefix:` so incomplete old captures cannot collide with new full-source identities; recapture creates a new item and links the source when possible. Legacy rationales and source endings that were never stored cannot be recovered automatically. Existing idempotency snapshots remain historical replay records. Back up the database before upgrading; see [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ## Add It To An Agent
+
+### MCP Clients
+
+MCP-capable agents can discover typed tools without installing the prose skill:
+
+```bash
+npx github:aboutaaron/reading-memory setup --target mcp
+```
+
+Setup writes the same private `~/.reading-api/env` file and prints a JSON `mcpServers` registration using the current installation's Node executable and CLI path. Copy that registration into your client's MCP configuration. For clients using another format, use the printed `command` and `args` values; no bearer token belongs in the client configuration. Keep that installation available while the client uses it. The existing Codex, OpenClaw, and Claude Code skill targets remain available.
+
+From an installed checkout, the server entry point is:
+
+```bash
+npm install
+npx reading-memory mcp
+```
+
+The MCP process communicates over stdio and calls the existing HTTP service. Start that service separately using the same env file. `READING_MEMORY_URL` and `READING_API_TOKEN` environment values override the file; use `mcp --env-file /path/to/env` or `READING_MEMORY_ENV_FILE` to select another file. Only loopback HTTP/HTTPS origins are accepted, and redirects are refused. The bearer token is never returned in tool results or diagnostic logs.
+
+MCP requires `READING_API_TOKEN` to contain at least 32 non-whitespace ASCII characters; setup-generated UUIDs already meet this requirement. This prevents short credentials from colliding with ordinary response fields during redaction. If MCP startup fails with a preserved shorter custom token, generate a new UUID and update `READING_API_TOKEN` in the shared env file and any overriding environments, then restart the HTTP service and MCP client with that same token. Setup preserves existing tokens and never rotates them automatically; the HTTP API's existing token compatibility is unchanged.
+
+Tools mirror the HTTP contracts: `ingest`, `query`, `brief_guide`, `brief_events`, `get_item`, `annotations`, `health`, `forget`, and `reanalyze`. Tool descriptions explain when to use them. Supply UUID request IDs where required and reuse a write's ID only when retrying its identical payload. `get_item` omits source text unless `include_text: true`; `forget` requires an explicit user deletion request. Successful results preserve the API envelope under `structuredContent` and as JSON text, while failures also set MCP `isError`.
+
+The adapter derives tool JSON Schemas from the shared Valibot HTTP contracts and validates calls with those same schemas. Calendar-date and non-whitespace checks are enforced at runtime. It uses the official [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk/tree/v1.x) and [Valibot JSON Schema converter](https://valibot.dev/guides/json-schema/).
+
+### Skill-Based Clients
 
 Reading Memory includes a bundled agent skill at:
 

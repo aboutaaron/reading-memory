@@ -142,7 +142,7 @@ Codex and OpenClaw use different surfaces for user-invocable commands; the `--ta
 
 Reading Memory is a loopback-only Node + SQLite service for agent-owned reading memory.
 
-It accepts text, URLs, and PDF URLs; extracts and normalizes the content; stores a durable corpus; and uses direct OpenAI or Anthropic SDK calls for structured reading judgment.
+It accepts text, URLs, and PDF URLs; extracts and normalizes the content; stores a durable corpus; and uses direct OpenAI or Anthropic SDK calls for structured reading judgment. [PDF parsing](docs/PDF-PARSING.md) runs in an isolated, abortable worker with a 15-second deadline and bounded heap, input, page count, and output.
 
 It is not a chat app, browser plugin, vector database starter kit, or replacement for OpenClaw, Claude Code, Codex, or any other agent runtime. It is a backend harness those agents can call when they need to preserve reading judgment beyond the current conversation.
 

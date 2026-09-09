@@ -57,7 +57,7 @@ export async function extractSource(request: IngestRequest, signal?: AbortSignal
   const explicitTitle = cleanMetadata('title' in request.source ? request.source.title : null);
   let capture: { text: string; title: string | null; author: string | null; publisher: string | null; publishedAt: string | null; extractor: string; titleSource: string | null; pages?: number };
   if (fetched.mime === 'application/pdf') {
-    const pdf = await (dependencies.extractPdfText ?? extractPdfText)(fetched.bytes);
+    const pdf = await (dependencies.extractPdfText ?? extractPdfText)(fetched.bytes, signal);
     capture = { ...pdf, publisher: null, publishedAt: null, extractor: 'pdf', titleSource: pdf.title ? 'pdf-metadata' : null };
   } else if (fetched.mime === 'text/plain') {
     capture = { text: new TextDecoder().decode(fetched.bytes), title: null, author: null, publisher: null, publishedAt: null, extractor: 'text', titleSource: null };

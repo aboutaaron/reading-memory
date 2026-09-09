@@ -4,10 +4,18 @@ type Bucket = { count: number; resetAt: number };
 
 export class RateLimiter {
   private buckets = new Map<string, Bucket>();
+  private nextPruneAt = 0;
 
   constructor(private readonly limits: Record<string, number>) {}
 
   check(principal: string, route: string, now = Date.now()) {
+    // Reclaim inactive principals without scanning every bucket on each request.
+    if (now >= this.nextPruneAt) {
+      for (const [key, bucket] of this.buckets) {
+        if (bucket.resetAt <= now) this.buckets.delete(key);
+      }
+      this.nextPruneAt = now + 60_000;
+    }
     const limit = this.limits[route] ?? 30;
     const key = `${principal}:${route}`;
     const bucket = this.buckets.get(key);

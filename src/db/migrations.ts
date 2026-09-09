@@ -1,6 +1,6 @@
 import type { Database } from './connection.js';
 
-export const CURRENT_USER_VERSION = 3;
+export const CURRENT_USER_VERSION = 4;
 
 export function migrateSchema(db: Database, fromVersion: number) {
   let version = fromVersion;
@@ -15,7 +15,19 @@ export function migrateSchema(db: Database, fromVersion: number) {
     migrateToV3(db);
     version = 3;
   }
+  if (version < 4) {
+    migrateToV4(db);
+    version = 4;
+  }
   return version;
+}
+
+function migrateToV4(db: Database) {
+  const legacyTable = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sessions'").get();
+  // Opaque legacy framework state is not ours to discard. Remove only an empty table.
+  if (legacyTable && !db.prepare('SELECT 1 FROM sessions LIMIT 1').get()) {
+    db.exec('DROP TABLE sessions');
+  }
 }
 
 function migrateToV3(db: Database) {

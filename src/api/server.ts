@@ -8,7 +8,7 @@ import type { Database } from '../db/connection.js';
 import { ApiError, toErrorPayload } from './errors.js';
 import { requireAuth } from './auth.js';
 import { RateLimiter } from './rate-limit.js';
-import { AnnotationRequestSchema, BriefEventsRequestSchema, BriefGuideRequestSchema, IngestRequestSchema, QueryRequestSchema } from './contracts.js';
+import { AnnotationRequestSchema, BriefEventsRequestSchema, BriefGuideRequestSchema, IngestRequestSchema, QueryRequestSchema, RequestIdSchema } from './contracts.js';
 import { ItemStore } from '../reading/item-store.js';
 import {
   createFlueReadingAnalyzer,
@@ -38,7 +38,15 @@ export function createReadingApi(
     : flueAnalyzerHealth);
 
   return createServer(async (req, res) => {
-    const requestId = req.headers['x-request-id']?.toString() ?? null;
+    let requestId = req.headers['x-request-id']?.toString() ?? null;
+    const readRequestBody = async () => {
+      const raw = await readJson(req);
+      if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+        const id = v.safeParse(RequestIdSchema, (raw as Record<string, unknown>).request_id);
+        if (id.success) requestId = id.output;
+      }
+      return raw;
+    };
     try {
       assertAllowedHost(req, config);
       const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
@@ -57,7 +65,7 @@ export function createReadingApi(
       if (req.method === 'POST' && url.pathname === '/ingest') {
         limiter.check(principal, 'ingest');
         const deadline = Date.now() + LIMITS.maxSyncResponseSeconds * 1000;
-        const raw = await readJson(req);
+        const raw = await readRequestBody();
         const body = v.parse(IngestRequestSchema, normalizeSourceShape(raw));
         const response = await store.ingest({
           principal,
@@ -76,7 +84,7 @@ export function createReadingApi(
 
       if (req.method === 'POST' && url.pathname === '/query') {
         limiter.check(principal, 'query');
-        const body = v.parse(QueryRequestSchema, await readJson(req));
+        const body = v.parse(QueryRequestSchema, await readRequestBody());
         const queryInput: Parameters<typeof queryCorpus>[1] = { query: body.query };
         if (body.top_k !== undefined) queryInput.topK = body.top_k;
         if (body.filters?.since !== undefined) queryInput.since = body.filters.since;
@@ -87,7 +95,7 @@ export function createReadingApi(
 
       if (req.method === 'POST' && url.pathname === '/brief-guide') {
         limiter.check(principal, 'brief');
-        const body = v.parse(BriefGuideRequestSchema, await readJson(req));
+        const body = v.parse(BriefGuideRequestSchema, await readRequestBody());
         const briefInput: Parameters<typeof briefGuide>[1] = { briefDate: body.brief_date };
         if (body.lookback_hours !== undefined) briefInput.lookbackHours = body.lookback_hours;
         if (body.focus !== undefined) briefInput.focus = body.focus;
@@ -97,7 +105,7 @@ export function createReadingApi(
 
       if (req.method === 'POST' && url.pathname === '/brief-events') {
         limiter.check(principal, 'brief');
-        const body = v.parse(BriefEventsRequestSchema, await readJson(req));
+        const body = v.parse(BriefEventsRequestSchema, await readRequestBody());
         const data = briefEventStore.record({
           principal,
           requestId: body.request_id,
@@ -110,7 +118,7 @@ export function createReadingApi(
       const annotationMatch = /^\/items\/([^/]+)\/annotations$/.exec(url.pathname);
       if (req.method === 'POST' && annotationMatch?.[1]) {
         limiter.check(principal, 'annotation');
-        const body = v.parse(AnnotationRequestSchema, await readJson(req));
+        const body = v.parse(AnnotationRequestSchema, await readRequestBody());
         const data = annotations.record({ principal, requestId: body.request_id, itemId: annotationMatch[1], body });
         return send(res, 200, { ok: true, request_id: body.request_id, data, error: null });
       }
@@ -138,8 +146,7 @@ export function createReadingApi(
     } catch (error) {
       const normalized = normalizeError(error);
       const status = normalized instanceof ApiError ? normalized.status : 500;
-      const rid = requestIdFromError(error) ?? requestId;
-      return send(res, status, { ok: false, request_id: rid, data: null, error: toErrorPayload(normalized) });
+      return send(res, status, { ok: false, request_id: requestId, data: null, error: toErrorPayload(normalized) });
     }
   });
 }
@@ -316,9 +323,4 @@ async function withTimeout<T>(fn: (signal: AbortSignal) => Promise<T>, ms: numbe
 
 function remainingMs(deadline: number) {
   return Math.max(0, deadline - Date.now());
-}
-
-function requestIdFromError(error: unknown): string | null {
-  if (error && typeof error === 'object' && 'issues' in error) return null;
-  return null;
 }

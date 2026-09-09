@@ -4,7 +4,7 @@ import type { AnnotationRequest } from '../api/contracts.js';
 import { LIMITS } from '../config.js';
 import { rebuildItemFts, transaction, type Database } from '../db/connection.js';
 import { sha256, stableJson } from '../ingest/content-hash.js';
-import { assertNoInFlightIngest } from './item-store.js';
+import { assertNoInFlightIngest, parseReplaySnapshot } from './item-store.js';
 
 export type ReaderAnnotationRecord = {
   id: string;
@@ -73,7 +73,7 @@ export class ReaderAnnotationStore {
           throw new ApiError('IDEMPOTENCY_CONFLICT', 'request_id has already been used with a different payload', 409);
         }
         return {
-          ...JSON.parse(replay.response_snapshot) as ReaderAnnotationResponse,
+          ...parseReplaySnapshot<ReaderAnnotationResponse>(replay.response_snapshot),
           dedupe_status: 'idempotent_replay'
         };
       }

@@ -8,9 +8,10 @@ import type { Database } from '../db/connection.js';
 import { ApiError, toErrorPayload } from './errors.js';
 import { requireAuth } from './auth.js';
 import { RateLimiter } from './rate-limit.js';
-import { AnnotationRequestSchema, BriefEventsRequestSchema, BriefGuideRequestSchema, IngestRequestSchema, QueryRequestSchema, RequestIdSchema } from './contracts.js';
+import { AnnotationRequestSchema, BriefEventsRequestSchema, BriefGuideRequestSchema, IngestRequestSchema, QueryRequestSchema, ReanalyzeRequestSchema, RequestIdSchema } from './contracts.js';
 import { ItemStore } from '../reading/item-store.js';
 import {
+  READING_ANALYSIS_VERSION,
   createFlueReadingAnalyzer,
   flueAnalyzerHealth,
   type AnalyzerHealth,
@@ -20,6 +21,7 @@ import { extractSource, payloadHash } from '../reading/extract-source.js';
 import { briefGuide } from '../reading/brief-guide.js';
 import { getItem, queryCorpus } from '../reading/corpus-query.js';
 import { BriefEventStore, briefEventsPayloadHash } from '../reading/brief-events.js';
+import { analysisFreshness, listStaleItems } from '../reading/analysis-freshness.js';
 import { ReaderAnnotationStore } from '../reading/reader-annotations.js';
 
 export function createReadingApi(
@@ -115,6 +117,33 @@ export function createReadingApi(
         return send(res, 200, { ok: true, request_id: body.request_id, data, error: null });
       }
 
+      if (req.method === 'GET' && url.pathname === '/items') {
+        limiter.check(principal, 'query');
+        const limits = url.searchParams.getAll('limit');
+        const limit = limits.length ? Number(limits[0]) : 25;
+        if (url.searchParams.getAll('stale').length !== 1 || url.searchParams.get('stale') !== 'true'
+          || limits.length > 1 || !Number.isInteger(limit) || limit < 1 || limit > 100
+          || [...url.searchParams.keys()].some((key) => !['stale', 'limit'].includes(key))) {
+          throw new ApiError('BAD_REQUEST', 'Use stale=true and an optional limit from 1 to 100', 400);
+        }
+        const data = listStaleItems(db, READING_ANALYSIS_VERSION, config.flueModel, limit);
+        return send(res, 200, { ok: true, request_id: requestId, data, error: null });
+      }
+
+      const reanalyzeMatch = /^\/items\/([^/]+)\/reanalyze$/.exec(url.pathname);
+      if (req.method === 'POST' && reanalyzeMatch?.[1]) {
+        limiter.check(principal, 'ingest');
+        const deadline = Date.now() + LIMITS.maxSyncResponseSeconds * 1000;
+        const body = v.parse(ReanalyzeRequestSchema, await readRequestBody());
+        const data = await store.reanalyze({ principal, requestId: body.request_id, itemId: reanalyzeMatch[1],
+          analyze: (itemId, source) => withTimeout((signal) => analyzer({ itemId, title: source.title, text: source.extractedText,
+            readerContext: {
+              source_context: typeof source.provenance.source_context === 'string' ? source.provenance.source_context : null,
+              ingest_reason: typeof source.provenance.ingest_reason === 'string' ? source.provenance.ingest_reason : null
+            }, sessionId: `analysis:${itemId}:${body.request_id}`, signal }), remainingMs(deadline)) });
+        return send(res, 200, { ok: true, request_id: body.request_id, data, error: null });
+      }
+
       const annotationMatch = /^\/items\/([^/]+)\/annotations$/.exec(url.pathname);
       if (req.method === 'POST' && annotationMatch?.[1]) {
         limiter.check(principal, 'annotation');
@@ -124,6 +153,12 @@ export function createReadingApi(
       }
 
       const itemMatch = /^\/items\/([^/]+)$/.exec(url.pathname);
+      if (req.method === 'DELETE' && itemMatch?.[1]) {
+        limiter.check(principal, 'ingest');
+        if (url.searchParams.size > 0) throw new ApiError('BAD_REQUEST', 'Forget does not accept query parameters', 400);
+        const data = store.forget({ principal, itemId: itemMatch[1], ...(requestId ? { requestId } : {}) });
+        return send(res, 200, { ok: true, request_id: requestId, data, error: null });
+      }
       if (req.method === 'GET' && itemMatch?.[1]) {
         const includes = url.searchParams.getAll('include');
         if (includes.length > 1 || (includes.length === 1 && includes[0] !== 'text')) {
@@ -215,6 +250,10 @@ function capabilities() {
     query_modes: ['fts'],
     supports_brief_events: true,
     supports_reader_annotations: true,
+    supports_forget: true,
+    supports_reanalyze: true,
+    supports_stale_items: true,
+    analysis_version: READING_ANALYSIS_VERSION,
     query_confidence: 'uncalibrated; null for matches, zero for empty results',
     query_matching: 'meaningful terms across the full question; AND with explicit partial-term OR fallback',
     brief_time_boundary: 'UTC end of brief_date, exclusive next midnight',
@@ -237,6 +276,7 @@ function health(db: Database, config: AppConfig, analyzer: AnalyzerHealth) {
     ready,
     db: 'ok',
     analyzer,
+    analysis: analysisFreshness(db, READING_ANALYSIS_VERSION, config.flueModel),
     disk: { free_bytes: freeBytes, warn: freeBytes < LIMITS.warnDiskFreeBytes },
     backup: backupHealth(config)
   };

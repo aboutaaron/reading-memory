@@ -2,6 +2,7 @@ export type ErrorCode =
   | 'BAD_REQUEST'
   | 'UNAUTHORIZED'
   | 'NOT_FOUND'
+  | 'ITEM_FORGOTTEN'
   | 'RATE_LIMITED'
   | 'IDEMPOTENCY_CONFLICT'
   | 'ANALYSIS_IN_PROGRESS'

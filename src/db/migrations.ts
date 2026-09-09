@@ -1,6 +1,6 @@
 import type { Database } from './connection.js';
 
-export const CURRENT_USER_VERSION = 4;
+export const CURRENT_USER_VERSION = 5;
 
 export function migrateSchema(db: Database, fromVersion: number) {
   let version = fromVersion;
@@ -18,6 +18,10 @@ export function migrateSchema(db: Database, fromVersion: number) {
   if (version < 4) {
     migrateToV4(db);
     version = 4;
+  }
+  if (version < 5) {
+    migrateToV5(db);
+    version = 5;
   }
   return version;
 }
@@ -75,4 +79,16 @@ function migrateToV2(db: Database) {
     CREATE INDEX IF NOT EXISTS idx_brief_events_item_date ON brief_events(item_id, brief_date);
     CREATE INDEX IF NOT EXISTS idx_brief_events_resurface_after ON brief_events(resurface_after);
   `);
+}
+
+function migrateToV5(db: Database) {
+  db.exec(`CREATE TABLE analysis_jobs (
+    item_id TEXT PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE,
+    principal TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    payload_hash TEXT NOT NULL,
+    token TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    UNIQUE (principal, request_id)
+  )`);
 }

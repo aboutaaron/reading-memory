@@ -275,16 +275,20 @@ Expected healthy signals:
 - `journalctl --user -u reading-memory.service` contains metadata events only, not request bodies or extracted text.
 - `npm run eval:reading` passes before ranking, dedupe, or brief-guide changes are accepted. Its analyses are canned; model changes additionally require reviewed live-model evaluation.
 
-Rollback:
+Before a release first starts, stop the service and run `./scripts/backup-sqlite.sh` with the service's database environment. Record the previous release commit, the explicit backup path, and its `PRAGMA user_version`; verify the snapshot with `PRAGMA integrity_check`. Retain this pre-upgrade snapshot outside the daily backup's 30-day rotation for as long as rollback is needed. The SQLite backup captures committed WAL state; a plain copy of a live database does not.
+
+Rollback across a schema upgrade requires restoring that pre-upgrade snapshot. Schema v5 and later cannot be opened by the v4 service: checking out old code alone leaves startup failing. Stop the service and preserve a separate verified snapshot of the upgraded database before changing code. Then build the previous release and restore the explicit compatible backup before restarting:
 
 ```bash
 systemctl --user stop reading-memory.service
 git -C ~/reading-memory checkout <previous-release>
 cd ~/reading-memory && npm ci && npm run build
-systemctl --user start reading-memory.service
+./scripts/restore-from-backup.sh /absolute/path/to/pre-upgrade.sqlite
 ```
 
-Migration failure behavior: migrations run inside a transaction and use `PRAGMA user_version`. If migration fails, startup fails before serving traffic and leaves the prior DB state intact.
+The restore script restarts the installed runner only after restoration. Use the corresponding LaunchAgent stop command on macOS. Do not restart newer code after restoring the old snapshot, because it would migrate the database again. Verify `/health` and an authenticated smoke request after rollback. Restoring a pre-upgrade snapshot discards subsequent writes from the active corpus; retain the separate upgraded snapshot for recovery. If no compatible pre-upgrade snapshot exists, keep the newer service version and repair forward rather than lowering `user_version` by hand. A checkout-only rollback is appropriate only when both releases support the existing schema.
+
+Migration failure behavior: migrations run inside a transaction and use `PRAGMA user_version`. If migration fails, startup fails before serving traffic and leaves the prior DB state intact. Successful migrations are not automatically downgraded by a later checkout.
 
 ## Inspect Analysis Activity
 
@@ -303,3 +307,20 @@ The deployed default path is:
 ```
 
 Reading Memory sends one bounded structured request through an official provider SDK. SDK retries are disabled, cancellation reaches the provider, incomplete/refused/invalid outputs fail analysis, and no conversation state is stored. Schema v4 omits the unused `sessions` table in new databases and removes it on upgrade only when empty. Nonempty legacy tables and their rows are preserved; the current analyzer does not read or write them. Analyzer health checks local credentials and provider configuration without network calls; valid configuration is not proof of live provider access.
+
+### Forget an item
+
+`DELETE /items/:id` requires bearer authentication and shares the ingest rate limit. It accepts no body or query parameters. It deletes canonical item content, analysis history, tags, relationships, reader notes, brief events, and FTS in one transaction; newer items' `supersedes_item_id` references become null. Active analysis returns 409 `ANALYSIS_IN_PROGRESS`; a missing item returns 404. Success returns `{item_id, deleted: true}`. The activity log retains only the content hash and operational identifiers, never a free-form reason.
+
+Idempotency snapshots containing the item (including other items' connection evidence and multi-item brief batches) become content-free tombstones. Request IDs from failed or interrupted ingest attempts are also recovered from their durable start events and retired. These tombstones do not expire with ordinary successful-response caching. Their original request IDs return 410 `ITEM_FORGOTTEN`, preventing accidental replay or recapture. A fresh intentional capture uses a new request ID and logs `ingest.previously_forgotten`. Forgetting does not rewrite separate backup files.
+
+
+### Refresh stored analysis
+
+`POST /items/:id/reanalyze` accepts exactly `{request_id: UUID}` behind bearer authentication, shares the ingest rate limit, and has the same 60-second response budget. It analyzes stored text with the original caller context and current reader notes; it never fetches the source URL again. Success uses the ingest response shape with `dedupe_status: "reanalyzed"`. Retrying a completed request ID replays that response; request IDs remain shared across ingestion, reanalysis, annotations, and brief events.
+
+Reanalysis preserves the item ID, capture time, source, provenance, reader notes, and brief history. It retains all earlier analysis rows and atomically replaces current tags, outgoing model relationships, heuristic relationships, and FTS. Incoming model relationships remain valid because the cited source text has not changed. Existing query and brief results remain available while the new judgment is running. A failed attempt leaves the previous judgment intact. Concurrent reanalysis, duplicate ingestion, or forgetting the item returns `ANALYSIS_IN_PROGRESS`; schema v5 leases permit recovery after a process crash and prevent a late attempt from overwriting its successor.
+
+`/health` includes `analysis.current_version`, `analysis.current_model`, and `analysis.stale_items`. Authenticated `GET /items?stale=true&limit=25` returns metadata for up to 100 indexed items whose latest analysis version or model differs from the service. Prompt or relationship-rule changes must bump `READING_ANALYSIS_VERSION`; changing the configured model also marks earlier results stale.
+
+Run `npm run reanalyze -- --stale --limit 25` with the service's `READING_API_TOKEN`, host, and port configuration after an upgrade. The maintenance command processes one bounded batch through the loopback API, waits six seconds between items, and retries transient failures up to three times with the same request ID and exponential backoff (honoring retry delays up to 60 seconds). It prints item IDs and completion counts only and exits unsuccessfully if any item fails. Re-run for another batch after inspecting failures.

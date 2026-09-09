@@ -1,52 +1,16 @@
 import * as v from 'valibot';
-import { createSandboxSessionEnv, type SandboxApi } from '@flue/runtime';
-import {
-  createFlueContext,
-  resolveModel,
-  type FlueContextConfig
-} from '@flue/runtime/internal';
 import type { Database } from '../db/connection.js';
 import { ApiError } from '../api/errors.js';
 import type { Analysis, Relationship } from './types.js';
 import { canonicalRelationship, findRelationships } from './analyzer.js';
 import { FlueTraceLogger } from './flue-trace.js';
-import { analyzeItemSkill, createReadingAgent } from './flue-reading-agent.js';
 import { buildReadingContext, type CallerReadingContext, type PriorReadingItem } from './reading-context.js';
+import { ReadingAnalysisSchema, type ReadingAnalysis } from './analysis-schema.js';
+import { requestReadingAnalysis } from './provider-analysis.js';
+import { DEFAULT_READING_MODEL, resolveProviderModel } from './provider-model.js';
 
-const VIRTUAL_ROOT = '/workspace';
-export const READING_ANALYSIS_VERSION = 'reading-api-flue-v2';
-
+export const READING_ANALYSIS_VERSION = 'reading-api-sdk-v3';
 export const MODEL_RELATION_TYPES = ['supports', 'contradicts', 'extends', 'duplicates_angle', 'related', 'updates'] as const;
-
-const FlueAnalysisSchema = v.object({
-  summary: v.string(),
-  claims: v.array(v.string()),
-  relevance: v.object({
-    score: v.number(),
-    themes: v.array(v.string())
-  }),
-  recommended_action: v.picklist(['brief', 'save', 'skip']),
-  confidence: v.number(),
-  reason: v.string(),
-  tags: v.array(v.object({
-    tag: v.string(),
-    reason: v.string(),
-    confidence: v.number()
-  })),
-  relationships: v.array(v.object({
-    from_item_id: v.string(),
-    to_item_id: v.string(),
-    relation_type: v.string(),
-    explanation: v.string(),
-    confidence: v.number(),
-    evidence: v.optional(v.object({
-      source_quote: v.string(),
-      target_quote: v.string()
-    }))
-  }))
-});
-
-type FlueAnalysis = v.InferOutput<typeof FlueAnalysisSchema>;
 
 export type ReadingAnalyzerInput = {
   itemId: string;
@@ -54,144 +18,53 @@ export type ReadingAnalyzerInput = {
   text: string;
   readerContext?: CallerReadingContext;
   sessionId?: string;
-  /** Cancels the in-flight analysis (e.g. request deadline). Passed through to `session.skill()`. */
+  /** Cancels the provider request when the caller's deadline expires. */
   signal?: AbortSignal;
 };
-
 export type ReadingAnalyzer = (input: ReadingAnalyzerInput) => Promise<Analysis>;
+export type AnalyzerHealth = { status: 'ok' | 'unavailable'; warn: boolean };
 
-export type AnalyzerHealth = {
-  status: 'ok' | 'unavailable';
-  warn: boolean;
-};
-
-export function flueAnalyzerHealth(): AnalyzerHealth {
-  return { status: 'ok', warn: false };
-}
-
-/**
- * Wraps Flue's model resolver with per-provider baseUrl overrides driven by env vars.
- */
-export function wrapResolveModelWithBaseUrlOverrides(
-  base: NonNullable<FlueContextConfig['agentConfig']['resolveModel']>
-): NonNullable<FlueContextConfig['agentConfig']['resolveModel']> {
-  return (modelString: string) => {
-    const resolved = base(modelString);
-    if (!resolved || typeof resolved !== 'object') return resolved;
-    const provider = (resolved as { provider?: unknown }).provider;
-    if (typeof provider !== 'string' || provider.length === 0) return resolved;
-    const envKey = `${provider.toUpperCase().replace(/-/g, '_')}_BASE_URL`;
-    const override = process.env[envKey];
-    if (!override) return resolved;
-    return { ...resolved, baseUrl: override };
-  };
-}
-
-export function createFlueReadingAnalyzer(
-  db: Database,
-  options: {
-    model: string;
-    resolveModel?: FlueContextConfig['agentConfig']['resolveModel'];
-    tracePath?: string | null;
+/** Checks local configuration only. Provider availability is checked by the actual request. */
+export function flueAnalyzerHealth(model = DEFAULT_READING_MODEL, env: NodeJS.ProcessEnv = process.env): AnalyzerHealth {
+  try {
+    resolveProviderModel(model, env);
+    return { status: 'ok', warn: false };
+  } catch {
+    return { status: 'unavailable', warn: true };
   }
-): ReadingAnalyzer {
+}
+
+// Kept as an import-compatible name for existing service consumers; no Flue runtime remains.
+export function createFlueReadingAnalyzer(db: Database, options: {
+  model: string;
+  tracePath?: string | null;
+  env?: NodeJS.ProcessEnv;
+  /** SDK transport injection for deterministic tests; never substitutes for validation. */
+  fetch?: typeof fetch;
+}): ReadingAnalyzer {
   const traces = new FlueTraceLogger(options.tracePath);
-  const defaultResolver = wrapResolveModelWithBaseUrlOverrides(resolveModel);
-  const modelResolver = options.resolveModel ?? defaultResolver;
-  const agent = createReadingAgent(options.model);
-
   return async ({ itemId, title, text, readerContext, sessionId, signal }) => {
-    const requestedSessionId = sessionId ?? `analysis:${itemId}`;
-    const trace = traces.createTrace({
-      itemId,
-      sessionId: requestedSessionId,
-      title,
-      text,
-      model: options.model
-    });
-    const context = createFlueContext({
-      id: requestedSessionId,
-      agentName: 'reading',
-      env: process.env,
-      agentConfig: { resolveModel: modelResolver },
-      createDefaultEnv: async () => createSandboxSessionEnv(new AnalysisSandbox(), VIRTUAL_ROOT)
-    });
-    context.setEventCallback(trace.onEvent);
-
+    const trace = traces.createTrace({ itemId, sessionId: sessionId ?? `analysis:${itemId}`, title, text, model: options.model });
     try {
+      signal?.throwIfAborted();
+      const model = resolveProviderModel(options.model, options.env);
       const readingContext = buildReadingContext(db, { itemId, title, text, ...(readerContext ? { readerContext } : {}) });
-      const harness = await context.initializeRootHarness(agent);
-      let result: FlueAnalysis;
-      try {
-        const session = await harness.session();
-        const response = await session.skill(analyzeItemSkill, {
-          args: {
-            item_id: itemId,
-            title,
-            text,
-            ...readingContext
-          },
-          result: FlueAnalysisSchema,
-          ...(signal ? { signal } : {})
-        });
-        result = response.data;
-      } finally {
-        await harness.close();
-        await context.flushEventCallbacks();
-      }
-      const analysis = normalizeAnalysis(db, itemId, result, options.model, { text, priorItems: readingContext.prior_items });
+      const result = await requestReadingAnalysis(model, { item_id: itemId, title, text, ...readingContext }, {
+        ...(signal ? { signal } : {}), ...(options.fetch ? { fetch: options.fetch } : {}),
+        onResponse: trace.onResponse
+      });
+      const parsed = v.parse(ReadingAnalysisSchema, result);
+      const analysis = normalizeAnalysis(db, itemId, parsed, `${model.provider}/${model.id}`, { text, priorItems: readingContext.prior_items });
       await trace.success(analysis);
       return analysis;
     } catch (error) {
       await trace.error(error);
-      throw new ApiError('ANALYSIS_FAILED', 'Flue reading analysis failed', 502, true, 30);
+      throw new ApiError('ANALYSIS_FAILED', 'Reading analysis failed', 502, true, 30);
     }
   };
 }
 
-class AnalysisSandbox implements SandboxApi {
-  async readFile(): Promise<string> {
-    throw new Error('Reading Memory analysis sandbox does not expose files.');
-  }
-
-  async readFileBuffer(): Promise<Uint8Array> {
-    throw new Error('Reading Memory analysis sandbox does not expose files.');
-  }
-
-  async writeFile(): Promise<void> {
-    throw new Error('Reading Memory analysis sandbox is read-only.');
-  }
-
-  async stat(): Promise<never> {
-    throw new Error('Reading Memory analysis sandbox does not expose files.');
-  }
-
-  async readdir(): Promise<string[]> {
-    return [];
-  }
-
-  async exists(): Promise<boolean> {
-    return false;
-  }
-
-  async mkdir(): Promise<void> {
-    throw new Error('Reading Memory analysis sandbox is read-only.');
-  }
-
-  async rm(): Promise<void> {
-    throw new Error('Reading Memory analysis sandbox is read-only.');
-  }
-
-  async exec() {
-    return {
-      stdout: '',
-      stderr: 'Reading Memory analysis sandbox does not allow command execution.',
-      exitCode: 126
-    };
-  }
-}
-
-export function normalizeAnalysis(db: Database, itemId: string, result: FlueAnalysis, model: string, evidenceContext: {
+export function normalizeAnalysis(db: Database, itemId: string, result: ReadingAnalysis, model: string, evidenceContext: {
   text: string;
   priorItems: PriorReadingItem[];
 }): Analysis {
@@ -199,7 +72,7 @@ export function normalizeAnalysis(db: Database, itemId: string, result: FlueAnal
   const tags = result.tags
     .map((tag) => ({
       tag: tag.tag.trim().toLowerCase(),
-      reason: tag.reason.trim().slice(0, 300) || 'Flue reading judgment',
+      reason: tag.reason.trim().slice(0, 300) || 'Model reading judgment',
       confidence: clamp01(tag.confidence)
     }))
     .filter((tag) => tag.tag)
@@ -224,7 +97,7 @@ export function normalizeAnalysis(db: Database, itemId: string, result: FlueAnal
     seenRelationships.add(key);
     modelRelationships.push(canonicalRelationship(itemId, target.item_id, {
       relation_type: relationType,
-      explanation: relationship.explanation.trim().slice(0, 500) || 'Flue reading relationship',
+      explanation: relationship.explanation.trim().slice(0, 500) || 'Model reading relationship',
       confidence: clamp01(relationship.confidence),
       evidence: { source_quote: sourceQuote, target_quote: targetQuote },
       origin: 'model'
@@ -240,7 +113,7 @@ export function normalizeAnalysis(db: Database, itemId: string, result: FlueAnal
     },
     recommended_action: result.recommended_action,
     confidence: clamp01(result.confidence),
-    reason: result.reason.trim().slice(0, 600) || 'Flue reading judgment completed.',
+    reason: result.reason.trim().slice(0, 600) || 'Model reading judgment completed.',
     tags,
     relationships: (modelRelationships.length ? modelRelationships : findRelationships(db, itemId, themes)).slice(0, 3),
     model,

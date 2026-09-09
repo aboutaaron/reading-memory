@@ -1,7 +1,6 @@
 import { appendFile, mkdir } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
-import type { FlueEvent } from '@flue/runtime';
 import { sha256 } from '../ingest/content-hash.js';
 import type { Analysis } from './types.js';
 
@@ -21,29 +20,14 @@ export type FlueTraceEvent =
       text_sha256: string;
       model: string;
     })
-  | (TraceBase & {
-      event: 'flue_event';
-      flue_type: FlueEvent['type'];
-      session_id?: string;
-      parent_session_id?: string;
-      task_id?: string;
-      text_chars?: number;
-      tool_name?: string;
-      tool_call_id?: string;
-      args_keys?: string[];
-      is_error?: boolean;
-      result_summary?: string;
-      error_kind?: string;
-      error_message_chars?: number;
-      error_message_sha256?: string;
-    })
+  | (TraceBase & ProviderResponseMetadata & { event: 'provider_response' })
   | (TraceBase & {
       event: 'analysis_success';
       duration_ms: number;
       recommended_action: Analysis['recommended_action'];
       confidence: number;
       relevance_score: number;
-      themes: string[];
+      theme_count: number;
       tag_count: number;
       relationship_count: number;
       model: string;
@@ -57,7 +41,7 @@ export type FlueTraceEvent =
       error_message_sha256: string;
     });
 
-type FlueEventTraceSummary = Omit<Extract<FlueTraceEvent, { event: 'flue_event' }>, keyof TraceBase>;
+export type ProviderResponseMetadata = { provider: 'openai' | 'anthropic'; output_chars: number; input_tokens: number; output_tokens: number };
 
 export class FlueTraceLogger {
   private ready: Promise<void> | null = null;
@@ -91,12 +75,11 @@ export class FlueTraceLogger {
 
     return {
       traceId: base.trace_id,
-      onEvent: (event: FlueEvent) => {
-        void this.write({
-          ...base,
-          ...summarizeFlueEvent(event),
-          ts: now()
-        });
+      onResponse: (metadata: ProviderResponseMetadata) => {
+        void this.write({ ...base, ts: now(), event: 'provider_response',
+          provider: metadata.provider === 'anthropic' ? 'anthropic' : 'openai',
+          output_chars: safeCount(metadata.output_chars), input_tokens: safeCount(metadata.input_tokens),
+          output_tokens: safeCount(metadata.output_tokens) });
       },
       success: async (analysis: Analysis) => {
         await this.write({
@@ -107,7 +90,7 @@ export class FlueTraceLogger {
           recommended_action: analysis.recommended_action,
           confidence: analysis.confidence,
           relevance_score: analysis.relevance.score,
-          themes: analysis.relevance.themes,
+          theme_count: analysis.relevance.themes.length,
           tag_count: analysis.tags.length,
           relationship_count: analysis.relationships.length,
           model: analysis.model,
@@ -143,70 +126,12 @@ export class FlueTraceLogger {
   private warn(error: unknown) {
     if (this.warned) return;
     this.warned = true;
-    const message = error instanceof Error ? error.message : String(error);
     console.error(JSON.stringify({
       event: 'reading-api.flue_trace_write_failed',
       trace_path: this.path,
       error_kind: errorKind(error)
     }));
   }
-}
-
-function summarizeFlueEvent(event: FlueEvent): FlueEventTraceSummary {
-  const base: FlueEventTraceSummary = {
-    event: 'flue_event' as const,
-    flue_type: event.type
-  };
-  addDefined(base, 'session_id', event.session);
-  addDefined(base, 'parent_session_id', event.parentSession);
-  addDefined(base, 'task_id', event.taskId);
-
-  switch (event.type) {
-    case 'text_delta':
-      return { ...base, text_chars: event.text.length };
-    case 'tool_start':
-      return {
-        ...base,
-        tool_name: event.toolName,
-        tool_call_id: event.toolCallId,
-        args_keys: event.args && typeof event.args === 'object' ? Object.keys(event.args).sort() : []
-      };
-    case 'tool':
-      return {
-        ...base,
-        tool_name: event.toolName,
-        tool_call_id: event.toolCallId,
-        is_error: event.isError,
-        result_summary: summarizeValue(event.result)
-      };
-    case 'task_start':
-      return { ...base, task_id: event.taskId };
-    case 'task':
-      return { ...base, task_id: event.taskId, is_error: event.isError, result_summary: summarizeValue(event.result) };
-    case 'operation':
-    case 'run_end':
-      return event.error
-        ? { ...base, is_error: event.isError, ...summarizeError(event.error) }
-        : { ...base, is_error: event.isError, result_summary: summarizeValue(event.result) };
-    case 'compaction':
-      return event.error
-        ? { ...base, is_error: event.isError, ...summarizeError(event.error) }
-        : { ...base, is_error: event.isError };
-    case 'submission_settled':
-      return event.error
-        ? { ...base, is_error: event.outcome !== 'completed', ...summarizeError(event.error) }
-        : { ...base, is_error: event.outcome !== 'completed', result_summary: summarizeValue(event.result) };
-    default:
-      return base;
-  }
-}
-
-function summarizeValue(value: unknown) {
-  if (value === null || value === undefined) return String(value);
-  if (typeof value === 'string') return `${value.length} chars`;
-  if (Array.isArray(value)) return `array(${value.length})`;
-  if (typeof value === 'object') return `object(${Object.keys(value).sort().join(',')})`;
-  return typeof value;
 }
 
 function summarizeError(error: unknown) {
@@ -262,8 +187,8 @@ function errorMessage(error: unknown) {
   return String(error);
 }
 
-function addDefined<T extends object, K extends string, V>(target: T, key: K, value: V | undefined): asserts target is T & Record<K, V> {
-  if (value !== undefined) Object.assign(target, { [key]: value });
+function safeCount(value: unknown) {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : 0;
 }
 
 function now() {

@@ -17,6 +17,10 @@ type TraceEvent = {
   confidence?: number;
   relevance_score?: number;
   themes?: string[];
+  theme_count?: number;
+  provider?: string;
+  input_tokens?: number;
+  output_tokens?: number;
   error_kind?: string;
   error_message_chars?: number;
   error_message_sha256?: string;
@@ -81,12 +85,15 @@ function printTrace(trace: ReturnType<typeof groupByTrace>[number]) {
   console.log(`  started: ${trace.startedAt ?? '(unknown)'}`);
   if (start?.title_sha256) console.log(`  title: ${start.title_chars ?? '?'} chars, ${start.title_sha256}`);
   if (start?.model) console.log(`  model: ${start.model}`);
-  console.log(`  flue events: ${flueEvents.map((event) => event.flue_type).join(', ') || '(none)'}`);
+  if (flueEvents.length) console.log(`  legacy flue events: ${flueEvents.map((event) => event.flue_type).join(', ')}`);
+  for (const event of trace.events.filter((event) => event.event === 'provider_response')) {
+    console.log(`  provider: ${event.provider}, tokens in/out: ${event.input_tokens}/${event.output_tokens}`);
+  }
 
   if (success) {
     console.log(`  status: success in ${success.duration_ms}ms`);
     console.log(`  action: ${success.recommended_action}, confidence ${fmt(success.confidence)}, relevance ${fmt(success.relevance_score)}`);
-    console.log(`  themes: ${success.themes?.join(', ') || '(none)'}`);
+    console.log(`  theme count: ${success.theme_count ?? success.themes?.length ?? 0}`);
   } else if (error) {
     console.log(`  status: error in ${error.duration_ms}ms`);
     console.log(`  error: ${error.error_kind ?? '(unknown)'} (${error.error_message_chars ?? '?'} chars, ${error.error_message_sha256 ?? 'no hash'})`);

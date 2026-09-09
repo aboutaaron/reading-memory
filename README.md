@@ -10,7 +10,7 @@ Agents can read the page in front of them. They usually cannot build durable tas
 
 Reading Memory preserves what was worth saving, how it connected to prior sources, and when it should resurface.
 
-Reading Memory is the local service for that job. It gives agents explicit endpoints for ingestion, recall, and brief preparation, backed by SQLite and [Flue](https://github.com/withastro/flue).
+Reading Memory is the local service for that job. It gives agents explicit endpoints for ingestion, recall, and brief preparation, backed by SQLite and direct provider SDKs.
 
 ## Install
 
@@ -31,21 +31,20 @@ npx github:aboutaaron/reading-memory setup --target env
 
 Use `--dry-run` to inspect the files it would create.
 
-Re-running `setup` is safe. The command preserves the existing bearer token and any extra keys you have added to the env file — provider base-URL overrides, custom Flue model pinning, anything you tuned by hand. Only the keys `setup` owns (URL, token, host, port, paths) are rewritten.
+Re-running `setup` is safe. The command preserves the existing bearer token and any extra keys you have added to the env file — provider base-URL overrides, custom model pinning, anything you tuned by hand. Only the keys `setup` owns (URL, token, host, port, paths) are rewritten.
 
-### Routing Flue Analysis Through A Proxy
+### Model and provider configuration
 
-Flue analysis calls the underlying LLM provider directly. If you need that traffic to flow through a corporate proxy, Cloudflare AI Gateway, or a self-hosted gateway (rather than the public provider URL), set a per-provider `<PROVIDER>_BASE_URL` env var alongside `READING_API_FLUE_MODEL`. The override is applied after the model is resolved.
+The default provider model ID is `gpt-5.6-luna`. Set `OPENAI_API_KEY` in the service environment. Use `READING_API_MODEL=anthropic/claude-sonnet-4-5` with `ANTHROPIC_API_KEY` to select Anthropic. `READING_API_FLUE_MODEL` remains a fallback alias for existing installations; `READING_API_MODEL` takes precedence. An `openai/` prefix is accepted but removed before the SDK request.
+
+Only OpenAI and Anthropic are supported. Other former Flue provider names must be changed to one of these providers or an API-compatible gateway. Configure the SDK's complete API base URL, including `/v1` for OpenAI:
 
 ```bash
-# Route openai/* models through your proxy (matches the OpenAI SDK convention).
-OPENAI_BASE_URL=https://your-openai-proxy.example.com
-
-# Other Flue providers follow the same pattern.
+OPENAI_BASE_URL=https://your-openai-proxy.example.com/v1
 ANTHROPIC_BASE_URL=https://your-anthropic-proxy.example.com
 ```
 
-The env var name is derived from the resolved provider: hyphens become underscores, uppercased, suffixed with `_BASE_URL`. So `cloudflare-ai-gateway/...` reads from `CLOUDFLARE_AI_GATEWAY_BASE_URL`. See `.env.example` for more.
+Missing credentials, unsupported providers, and invalid base URLs make analyzer health unavailable. Health checks validate local configuration without sending a model request; a configured key does not prove provider access. See `.env.example` and [the analyzer decision](ARCHITECTURE.md#analyzer-decision-issue-21).
 
 ## Workflow
 
@@ -58,7 +57,7 @@ The env var name is derived from the resolved provider: hyphens become underscor
 | Preserve a reader's comment, question, or correction about a source | `POST /items/:id/annotations` |
 | Resume a multi-step reading workflow after interruption | run ledger files + `npm run run-ledger` |
 | Inspect recent operational events while debugging | authenticated `GET /activity` |
-| Inspect model judgment and failures | local SQLite + Flue traces |
+| Inspect model judgment and failures | local SQLite + redacted analysis traces |
 
 The calling agent owns the user interaction. Reading Memory is the durable subsystem it calls when current context is not enough.
 
@@ -113,7 +112,7 @@ Codex and OpenClaw use different surfaces for user-invocable commands; the `--ta
 
 Reading Memory is a loopback-only Node + SQLite service for agent-owned reading memory.
 
-It accepts text, URLs, and PDF URLs; extracts and normalizes the content; stores a durable corpus; and uses [Flue](https://github.com/withastro/flue) for structured reading judgment.
+It accepts text, URLs, and PDF URLs; extracts and normalizes the content; stores a durable corpus; and uses direct OpenAI or Anthropic SDK calls for structured reading judgment.
 
 It is not a chat app, browser plugin, vector database starter kit, or replacement for OpenClaw, Claude Code, Codex, or any other agent runtime. It is a backend harness those agents can call when they need to preserve reading judgment beyond the current conversation.
 
@@ -166,7 +165,7 @@ Agent calls Reading Memory over localhost HTTP
         ↓
 Reading Memory extracts, normalizes, dedupes, and stores the item
         ↓
-Flue analyzes the item with a structured skill
+A provider SDK returns structured reading judgment
         ↓
 SQLite stores the canonical corpus facts and structured analysis
         ↓
@@ -175,11 +174,11 @@ Later, agents query the corpus for recall, brief prep, or synthesis
 
 The TypeScript service owns the reliability work: HTTP contracts, auth, URL/PDF extraction, SSRF protections, content hashes, idempotency, SQLite persistence, query, backups, and `systemd` (Linux) / `launchd` (macOS) deployment.
 
-Flue owns the judgment boundary: invoking the packaged reading skill and producing structured output. Its per-analysis conversation is opaque and ephemeral; Reading Memory persists only the validated result and redacted trace metadata.
+The analyzer owns the judgment boundary: one structured provider call using a packaged prompt. Reading Memory validates the result and source evidence before persistence. It stores redacted trace metadata, with no conversation or tool execution loop.
 
 ## Architecture
 
-For the service boundary, storage model, bearer-token rationale, and Flue integration details, see [ARCHITECTURE.md](ARCHITECTURE.md).
+For the service boundary, storage model, bearer-token rationale, and analyzer decision, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## What This Adds Beyond Agent Tools
 

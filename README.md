@@ -251,3 +251,5 @@ All query modes accept `lexical_policy: "all"` to exclude partial keyword matche
 Use the [OpenClaw retest protocol](docs/OPENCLAW-RETEST.md) to compare the modes on an isolated copy of your reading corpus, including negative questions, relationship audits and evidence-supported answers.
 
 For missing graph connections or stale analyses, use authenticated `GET /diagnostics` (MCP `diagnostics`) and the [graph maintenance guide](docs/GRAPH-MAINTENANCE.md). It explains model/version mismatches and counts quote-valid model edges. Preview bounded reanalysis with `npm run reanalyze -- --stale --limit 25 --dry-run`; `--apply` performs the work. The historical command without either flag still applies.
+
+For missing failed captures, use authenticated `GET /items?status=failed&limit=25&offset=0` (MCP `list_failed_items`) and the [failed-capture recovery guide](docs/FAILED-CAPTURES.md). The inventory reports retained content and safe known failure codes, keeps legacy unknown causes explicit, and never retries automatically.

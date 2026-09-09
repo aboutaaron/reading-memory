@@ -58,6 +58,15 @@ const definitions: ToolDefinition[] = [
     description: 'Inspect analysis freshness reasons, embedding availability and graph relationship coverage. Read-only; makes no provider calls. Eligible graph edges have current exact quotations but their meaning is unverified. Zero edges or stale analyses alone do not establish that the analyzer model is inadequate.'
   },
   {
+    name: 'list_failed_items', method: 'GET', readOnly: true,
+    schema: v.strictObject({
+      limit: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(100))),
+      offset: v.optional(v.pipe(v.number(), v.integer(), v.minValue(0), v.maxValue(Number.MAX_SAFE_INTEGER)))
+    }),
+    path: input => `/items?status=failed&limit=${input.limit ?? 25}&offset=${input.offset ?? 0}`,
+    description: 'Inspect failed retained captures and bounded pagination without retrying them. Returns safe known failure codes or unknown, retained-text availability and recovery guidance. Failures before an item was retained are not included. Inventory before mutations; pages can shift as items recover. Retry only through original ingestion with original source type/payload and request ID when available; never bypass forgetting or reinterpret URL/PDF sources as text to force recovery.'
+  },
+  {
     name: 'forget', method: 'DELETE', schema: v.strictObject({ item_id: ItemIdSchema }),
     path: (input) => `/items/${input.item_id}`, destructive: true,
     description: 'Permanently forget a saved item only when the user requests deletion. Removes that item and its related corpus records; backups are separate. A second deletion returns not found.'

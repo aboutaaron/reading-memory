@@ -7,6 +7,7 @@ import { LIMITS } from '../config.js';
 import type { Analysis, ExtractedSource, RelatedItem } from './types.js';
 import { sha256, stableJson } from '../ingest/content-hash.js';
 import { extractSearchTerms, toFtsQuery } from './search-terms.js';
+import { safeFailureMetadata } from './failed-captures.js';
 
 export type IngestResponse = {
   item_id: string;
@@ -208,7 +209,7 @@ export class ItemStore {
       transaction(this.db, () => {
         const retained = this.db.prepare('SELECT 1 FROM items WHERE id = ?').get(input.itemId);
         this.log('item.reanalysis_failed', input.principal, input.requestId, retained ? input.itemId : null,
-          { error_class: error instanceof Error ? error.name : 'UnknownError' });
+          safeFailureMetadata(error));
       });
       throw error;
     } finally {
@@ -340,7 +341,7 @@ export class ItemStore {
         this.log(eventType, input.principal, input.requestId, retainedItem ? prepared.itemId : null, {
           source_type: input.source.sourceType,
           content_hash: input.source.contentHash,
-          error_class: error instanceof Error ? error.name : 'UnknownError'
+          ...safeFailureMetadata(error)
         });
       });
       throw error;

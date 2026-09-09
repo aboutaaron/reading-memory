@@ -14,10 +14,13 @@ export const MODEL_RELATION_TYPES = ['supports', 'contradicts', 'extends', 'dupl
 
 export type ReadingAnalyzerInput = {
   itemId: string;
+  priorItemIds?: string[];
   title: string | null;
   text: string;
   readerContext?: CallerReadingContext;
   sessionId?: string;
+  /** Absolute request deadline in milliseconds; optional work leaves time to save analysis. */
+  deadline?: number;
   /** Cancels the provider request when the caller's deadline expires. */
   signal?: AbortSignal;
 };
@@ -43,12 +46,12 @@ export function createFlueReadingAnalyzer(db: Database, options: {
   fetch?: typeof fetch;
 }): ReadingAnalyzer {
   const traces = new FlueTraceLogger(options.tracePath);
-  return async ({ itemId, title, text, readerContext, sessionId, signal }) => {
+  return async ({ itemId, title, text, readerContext, priorItemIds, sessionId, signal }) => {
     const trace = traces.createTrace({ itemId, sessionId: sessionId ?? `analysis:${itemId}`, title, text, model: options.model });
     try {
       signal?.throwIfAborted();
       const model = resolveProviderModel(options.model, options.env);
-      const readingContext = buildReadingContext(db, { itemId, title, text, ...(readerContext ? { readerContext } : {}) });
+      const readingContext = buildReadingContext(db, { itemId, title, text, ...(priorItemIds ? { priorItemIds } : {}), ...(readerContext ? { readerContext } : {}) });
       const result = await requestReadingAnalysis(model, { item_id: itemId, title, text, ...readingContext }, {
         ...(signal ? { signal } : {}), ...(options.fetch ? { fetch: options.fetch } : {}),
         onResponse: trace.onResponse

@@ -1,3 +1,4 @@
+import { deleteEmbedding, embeddingHash, embeddingText, saveEmbedding, vectorNeighbors } from './embeddings.js';
 import { randomUUID } from 'node:crypto';
 import type { Database } from '../db/connection.js';
 import { transaction, rebuildItemFts } from '../db/connection.js';
@@ -128,6 +129,7 @@ export class ItemStore {
           SELECT 1 FROM json_tree(idempotency_keys.response_snapshot) WHERE value = ?
         )`).run(FORGOTTEN_REQUEST_EXPIRY, input.itemId, input.itemId);
       this.db.prepare('DELETE FROM item_fts WHERE item_id = ?').run(input.itemId);
+      deleteEmbedding(this.db, input.itemId);
       this.db.prepare('DELETE FROM items WHERE id = ?').run(input.itemId);
       this.log('item.deleted', input.principal, validOperationalRequestId(input.requestId), null, { content_hash: item.content_hash });
       return { item_id: input.itemId, deleted: true };
@@ -346,13 +348,14 @@ export class ItemStore {
   }
 
   private insertAnalysis(itemId: string, analysis: Analysis, now: string) {
+    const analysisId = `analysis_${randomUUID().replace(/-/g, '').slice(0, 16)}`;
     this.db.prepare(`
       INSERT INTO analyses (
         id, item_id, summary, reason, claims_json, relevance_json, recommended_action,
         confidence, model, analysis_version, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      `analysis_${randomUUID().replace(/-/g, '').slice(0, 16)}`,
+      analysisId,
       itemId,
       analysis.summary,
       analysis.reason,
@@ -364,6 +367,15 @@ export class ItemStore {
       analysis.analysis_version,
       now
     );
+
+    let embedding = analysis.embedding ?? null;
+    if (embedding) {
+      const item = this.db.prepare('SELECT title FROM items WHERE id = ?').get(itemId) as { title: string | null };
+      // Title maintenance may finish while analysis awaits the provider. Keep its
+      // successful judgment, but discard a projection of the former title.
+      if (embedding.inputHash !== embeddingHash(embeddingText(item.title, analysis))) embedding = null;
+    }
+    saveEmbedding(this.db, itemId, analysisId, embedding);
 
     const insertTag = this.db.prepare('INSERT OR REPLACE INTO tags (item_id, tag, reason, confidence) VALUES (?, ?, ?, ?)');
     for (const tag of analysis.tags) insertTag.run(itemId, tag.tag, tag.reason, tag.confidence);
@@ -533,9 +545,7 @@ export class ItemStore {
       ...analysis.relevance.themes,
       ...analysis.tags.map((tag) => tag.tag)
     ], 10));
-    if (!terms) return [];
-
-    const rows = this.db.prepare(`
+    const rows = terms ? this.db.prepare(`
       SELECT i.id AS item_id, i.title, i.source_uri, bm25(item_fts) * -1 AS score
       FROM item_fts
       JOIN items i ON i.id = item_fts.item_id
@@ -549,8 +559,25 @@ export class ItemStore {
       title: string | null;
       source_uri: string | null;
       score: number;
-    }>;
+    }> : [];
 
+    let semantic: ReturnType<typeof vectorNeighbors> = [];
+    try {
+      const embedding = this.db.prepare('SELECT model, embedding FROM item_embeddings WHERE item_id = ?').get(itemId) as { model: string; embedding: Uint8Array } | undefined;
+      if (embedding) semantic = vectorNeighbors(this.db, Array.from(new Float32Array(Uint8Array.from(embedding.embedding).buffer)),
+        embedding.model, { topK: 5, excludeItemId: itemId }).filter(hit => hit.distance <= 0.5);
+    } catch {
+      // Optional projection damage must not prevent returning existing lexical reading.
+    }
+    if (semantic.length) {
+      const fused = new Map(rows.map((row, index) => [row.item_id, { ...row, score: 1 / (61 + index), match_reason: 'Lexical neighbor; reciprocal rank fusion.' }]));
+      semantic.forEach((hit, index) => {
+        const current = fused.get(hit.item_id);
+        fused.set(hit.item_id, { item_id: hit.item_id, title: hit.title, source_uri: hit.source_uri,
+          score: (current?.score ?? 0) + 1 / (61 + index), match_reason: current ? 'Lexical and semantic neighbor; reciprocal rank fusion.' : 'Semantic vector neighbor; inspect source evidence.' });
+      });
+      return [...fused.values()].sort((a, b) => b.score - a.score || a.item_id.localeCompare(b.item_id)).slice(0, 5);
+    }
     return rows.map((row) => ({
       item_id: row.item_id,
       title: row.title,

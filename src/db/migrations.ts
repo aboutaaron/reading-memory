@@ -1,6 +1,6 @@
 import type { Database } from './connection.js';
 
-export const CURRENT_USER_VERSION = 6;
+export const CURRENT_USER_VERSION = 7;
 
 export function migrateSchema(db: Database, fromVersion: number) {
   let version = fromVersion;
@@ -26,6 +26,10 @@ export function migrateSchema(db: Database, fromVersion: number) {
   if (version < 6) {
     migrateToV6(db);
     version = 6;
+  }
+  if (version < 7) {
+    migrateToV7(db);
+    version = 7;
   }
   return version;
 }
@@ -118,5 +122,19 @@ function migrateToV6(db: Database) {
     ALTER TABLE brief_events_next RENAME TO brief_events;
     CREATE INDEX idx_brief_events_item_date ON brief_events(item_id, brief_date);
     CREATE INDEX idx_brief_events_resurface_after ON brief_events(resurface_after);
+  `);
+}
+
+function migrateToV7(db: Database) {
+  db.exec(`
+    CREATE TABLE item_embeddings (
+      item_id TEXT PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE,
+      analysis_id TEXT NOT NULL REFERENCES analyses(id) ON DELETE CASCADE,
+      model TEXT NOT NULL,
+      dimensions INTEGER NOT NULL CHECK (dimensions = 1536),
+      input_hash TEXT NOT NULL,
+      embedding BLOB NOT NULL,
+      updated_at TEXT NOT NULL
+    );
   `);
 }

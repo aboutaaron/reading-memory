@@ -3,6 +3,8 @@ import { privateDatabasePath } from '../filesystem/private-files.js';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
+import * as sqliteVec from 'sqlite-vec';
+import { enableVectorIndex, rebuildVectorIndex, disableVectorIndex } from '../reading/embeddings.js';
 import { CURRENT_USER_VERSION, migrateSchema } from './migrations.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -12,18 +14,20 @@ export type Database = DatabaseSync;
 
 export function openDatabase(dbPath: string): Database {
   const privatePath = privateDatabasePath(dbPath, { create: true });
-  const db = new DatabaseSync(privatePath);
+  const db = new DatabaseSync(privatePath, { allowExtension: true });
   configureDatabase(db);
   migrate(db);
   reconcileFts(db);
+  initializeVectorIndex(db);
   return db;
 }
 
 export function openMemoryDatabase(): Database {
-  const db = new DatabaseSync(':memory:');
+  const db = new DatabaseSync(':memory:', { allowExtension: true });
   configureDatabase(db);
   migrate(db);
   reconcileFts(db);
+  initializeVectorIndex(db);
   return db;
 }
 
@@ -106,7 +110,9 @@ function assertEmptyV0Database(db: Database) {
     'item_fts',
     'brief_events',
     'reader_annotations',
-    'analysis_jobs'
+    'analysis_jobs',
+    'item_embeddings',
+    'item_vec'
   ];
   const placeholders = appTables.map(() => '?').join(',');
   const rows = db.prepare(`
@@ -133,4 +139,15 @@ export function transaction<T>(db: Database, fn: () => T): T {
     db.exec('ROLLBACK');
     throw error;
   }
+}
+
+function initializeVectorIndex(db: Database) {
+  try {
+    sqliteVec.load(db);
+    enableVectorIndex(db);
+    rebuildVectorIndex(db);
+  } catch {
+    disableVectorIndex(db);
+    // Optional extension/platform failures preserve the canonical corpus and FTS.
+  } finally { db.enableLoadExtension(false); }
 }

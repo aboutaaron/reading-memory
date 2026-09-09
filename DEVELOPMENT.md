@@ -347,3 +347,7 @@ Reanalysis preserves the item ID, capture time, source, provenance, reader notes
 `/health` includes `analysis.current_version`, `analysis.current_model`, and `analysis.stale_items`. Authenticated `GET /items?stale=true&limit=25` returns metadata for up to 100 indexed items whose latest analysis version or model differs from the service. Prompt or relationship-rule changes must bump `READING_ANALYSIS_VERSION`; changing the configured model also marks earlier results stale.
 
 Run `npm run reanalyze -- --stale --limit 25` with the service's `READING_API_TOKEN`, host, and port configuration after an upgrade. The maintenance command processes one bounded batch through the loopback API, waits six seconds between items, and retries transient failures up to three times with the same request ID and exponential backoff (honoring retry delays up to 60 seconds). It prints item IDs and completion counts only and exits unsuccessfully if any item fails. Re-run for another batch after inspecting failures.
+
+### Hybrid index maintenance
+
+Schema v7 adds canonical embedding projections linked to the current analysis. `item_vec` is a derived sqlite-vec index and is rebuilt at startup. `GET /items/:id` exposes `embedding_status` and `embedding_model`, without vectors. Hybrid requests and ingestion fall back safely when embedding work is unavailable; inspect the response's `retrieval_mode` and `fallback_reason`. Full configuration and dry-run/apply commands are in [Hybrid retrieval](docs/HYBRID-RETRIEVAL.md).

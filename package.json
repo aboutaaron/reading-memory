@@ -33,7 +33,8 @@
     "run-ledger": "node scripts/run-ledger.mjs",
     "smoke": "tsx scripts/smoke-test.ts",
     "traces": "tsx scripts/inspect-traces.ts",
-    "prepare": "npm run build"
+    "prepare": "npm run build",
+    "backfill:embeddings": "node --import tsx scripts/backfill-embeddings.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.91.1",
@@ -45,7 +46,8 @@
     "pdf-parse": "1.1.1",
     "undici": "8.10.2",
     "valibot": "1.3.1",
-    "zod": "4.5.4"
+    "zod": "4.5.4",
+    "sqlite-vec": "0.1.9"
   },
   "devDependencies": {
     "@types/node": "^22.15.3",

@@ -26,6 +26,7 @@ export type AppConfig = {
   dataDir: string;
   backupDir: string;
   flueModel: string;
+  embeddingModel?: string;
   flueTracePath: string | null;
 };
 
@@ -46,6 +47,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     authToken: env.READING_API_TOKEN ?? '',
     dataDir,
     backupDir: env.READING_API_BACKUP_DIR ?? join(homedir(), 'backups', 'reading-memory'),
+    embeddingModel: env.READING_API_EMBEDDING_MODEL ?? 'off',
     flueModel: env.READING_API_MODEL ?? env.READING_API_FLUE_MODEL ?? DEFAULT_READING_MODEL,
     flueTracePath: env.READING_API_FLUE_TRACE_PATH === 'off'
       ? null

@@ -241,3 +241,7 @@ Use this when the question is not "can my agent read this?" but "can my agent re
 For manual wiring, API examples, local development, deployment, backups, validation, and trace inspection, see [DEVELOPMENT.md](DEVELOPMENT.md).
 
 Track planned work in [GitHub issues](https://github.com/aboutaaron/reading-memory/issues). The [historical backlog audit](docs/backlog-migration.md) records what shipped and where remaining work moved.
+
+### Optional hybrid retrieval
+
+Lexical search remains the default. Set `READING_API_EMBEDDING_MODEL=openai/text-embedding-3-small` to enable optional embeddings, then request `mode: "hybrid"` on `/query`. Health reports missing embeddings; existing reading can be indexed with the dry-run-first `npm run backfill:embeddings` command. See [Hybrid retrieval](docs/HYBRID-RETRIEVAL.md) for configuration, provider data, backfill, and the limits of the synthetic evaluation.

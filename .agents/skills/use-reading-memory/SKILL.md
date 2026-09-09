@@ -48,6 +48,8 @@ Exact duplicate content returns the existing item. Related-but-new content may r
 
 Call `POST /query` before answering questions that may depend on stored reading memory, prior source material, or recurring themes.
 
+Lexical search is the default. If the service has embeddings configured, `mode: "hybrid"` can retrieve paraphrases with little word overlap. Inspect `retrieval_mode` and `fallback_reason`: unavailable embeddings fall back to lexical search. Hybrid scores and cosine distance are ranking signals, not probabilities or proof.
+
 Use returned items as evidence, not as final answers. If query results are weak or empty, say so.
 
 Read `match_strategy` and `matched_terms`: partial matches may cover only part of the question. Lexical retrieval may miss paraphrases without shared terms. `confidence: null` means uncalibrated, and the compatibility `answer` field is empty. Do not turn the number of results or a lexical score into certainty. Use `GET /items/:id` for truncation, rationale, annotations, and relationship evidence. Add `?include=text` only when you need the retained source text to verify a claim; default item reads omit that potentially large field.

@@ -6,6 +6,7 @@ import { getItem, queryCorpus } from '../reading/corpus-query.js';
 import { ItemStore } from '../reading/item-store.js';
 import { ReaderAnnotationStore } from '../reading/reader-annotations.js';
 import { runHybridRetrievalEval } from './hybrid-retrieval-eval.js';
+import { runRetrievalQualityEval } from './retrieval-quality-eval.js';
 import { readingMemoryBriefFixtures } from './reading-memory-brief-fixtures.js';
 import {
   EVAL_BRIEF_DATE, EVAL_INGESTED_AT, fixture,
@@ -15,7 +16,7 @@ import {
 
 export type ReadingMemoryEvalResult = {
   fixture_id: string;
-  check: 'query_recall' | 'brief_selection' | 'memory_durability' | 'hybrid_retrieval';
+  check: 'query_recall' | 'brief_selection' | 'memory_durability' | 'hybrid_retrieval' | 'lexical_policy' | 'graph_retrieval';
   passed: boolean;
   details: Record<string, unknown>;
 };
@@ -109,6 +110,7 @@ export async function runReadingMemoryEval(): Promise<ReadingMemoryEvalResult[]>
     }
   }
   results.push(...await runHybridRetrievalEval());
+  results.push(...await runRetrievalQualityEval());
   return results;
 }
 
@@ -117,6 +119,8 @@ export function summarizeReadingMemoryEval(results: ReadingMemoryEvalResult[]) {
   const recall = queries.map((result) => result.details.recall_at_5).filter((value): value is number => typeof value === 'number');
   const briefs = results.filter((result) => result.check === 'brief_selection');
   const hybrid = results.filter((result) => result.check === 'hybrid_retrieval');
+  const lexicalPolicy = results.filter((result) => result.check === 'lexical_policy');
+  const graph = results.filter((result) => result.check === 'graph_retrieval');
   const countLists = (rows: ReadingMemoryEvalResult[], key: string) => rows.reduce(
     (sum, row) => sum + (Array.isArray(row.details[key]) ? row.details[key].length : 0), 0
   );
@@ -131,6 +135,10 @@ export function summarizeReadingMemoryEval(results: ReadingMemoryEvalResult[]) {
     unsupported_answers: queries.filter((result) => result.details.unsupported_answer === true).length,
     hybrid_cases: hybrid.length,
     passed_hybrid_cases: hybrid.filter((result) => result.passed).length,
+    lexical_policy_cases: lexicalPolicy.length,
+    passed_lexical_policy_cases: lexicalPolicy.filter((result) => result.passed).length,
+    graph_cases: graph.length,
+    passed_graph_cases: graph.filter((result) => result.passed).length,
     brief_cases: briefs.length,
     irrelevant_brief_selections: countLists(briefs, 'irrelevant_selections'),
     missed_due_items: countLists(briefs, 'missed_due_items'),

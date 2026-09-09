@@ -247,3 +247,5 @@ Track planned work in [GitHub issues](https://github.com/aboutaaron/reading-memo
 Lexical search remains the default. Set `READING_API_EMBEDDING_MODEL=openai/text-embedding-3-small` to enable optional embeddings, then request `mode: "hybrid"` on `/query`. Health reports missing embeddings; existing reading can be indexed with the dry-run-first `npm run backfill:embeddings` command. See [Hybrid retrieval](docs/HYBRID-RETRIEVAL.md) for configuration, provider data, backfill, and the limits of the synthetic evaluation.
 
 All query modes accept `lexical_policy: "all"` to exclude partial keyword matches; default `any` retains OR fallback. Optional `mode: "hybrid+graph"` adds bounded one-hop context from existing quote-backed source relationships in SQLite. Results identify graph provenance and unverified relationship interpretations. Neither strict matching nor graph context establishes answer support; inspect source passages before answering.
+
+Use the [OpenClaw retest protocol](docs/OPENCLAW-RETEST.md) to compare the modes on an isolated copy of your reading corpus, including negative questions, relationship audits and evidence-supported answers.

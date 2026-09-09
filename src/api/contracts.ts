@@ -42,7 +42,7 @@ export const IngestRequestSchema = v.variant('source_type', [
 
 export const QueryRequestSchema = v.object({
   request_id: RequestIdSchema,
-  mode: v.optional(v.picklist(['fts', 'fts+usage', 'hybrid'])),
+  mode: v.optional(v.picklist(['fts', 'fts+usage', 'hybrid', 'hybrid+graph'])),
   lexical_policy: v.optional(v.picklist(['any', 'all'])),
   query: v.pipe(v.string(), v.minLength(1), v.maxLength(4000)),
   filters: v.optional(v.object({

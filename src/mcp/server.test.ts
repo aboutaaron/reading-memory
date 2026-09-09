@@ -83,6 +83,13 @@ test('stdio MCP lists typed tools and round-trips capture, recall, annotations, 
   assert.equal(strict.isError, false);
   assert.equal((envelope(strict).data as { lexical_policy: string }).lexical_policy, 'all');
   assert.deepEqual((envelope(strict).data as { citations: string[] }).citations, []);
+  const graph = await client.callTool({ name: 'query', arguments: {
+    request_id: randomUUID(), query: 'Cobalt caches', lexical_policy: 'all', mode: 'hybrid+graph'
+  } });
+  assert.equal(graph.isError, false);
+  assert.equal((envelope(graph).data as { requested_mode: string }).requested_mode, 'hybrid+graph');
+  assert.equal((envelope(graph).data as { lexical_policy: string }).lexical_policy, 'all');
+  assert.deepEqual((envelope(graph).data as { citations: string[] }).citations, [itemId]);
   const annotated = await client.callTool({ name: 'annotations', arguments: {
     item_id: itemId, request_id: randomUUID(), actor_type: 'user', actor: 'Reader', note: 'This matters for my project.'
   } });

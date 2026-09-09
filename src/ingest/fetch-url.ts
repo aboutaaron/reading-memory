@@ -1,6 +1,6 @@
 import { lookup as dnsLookup } from 'node:dns/promises';
 import type { LookupAddress } from 'node:dns';
-import { isIP, type LookupFunction } from 'node:net';
+import { BlockList, isIP, type LookupFunction } from 'node:net';
 import { Client, fetch } from 'undici';
 import { LIMITS } from '../config.js';
 import { ApiError } from '../api/errors.js';
@@ -10,7 +10,28 @@ export type Resolver = (hostname: string, options: { all: true; verbatim: true }
 const ALLOWED_MIME = ['text/html', 'text/plain', 'application/xhtml+xml', 'application/pdf'];
 const LOOPBACK_NAMES = new Set(['localhost', 'localhost.localdomain', 'ip6-localhost', 'ip6-loopback']);
 
-function isPrivateIp(ip: string): boolean {
+// Conservative fetch policy: reject whole IANA special-purpose blocks, even
+// their globally reachable service/anycast exceptions, plus IPv4 multicast.
+// Registries checked 2026-09-09 (both last updated 2025-10-09):
+// https://www.iana.org/assignments/iana-ipv4-special-registry/
+// https://www.iana.org/assignments/iana-ipv6-special-registry/
+const blockedIpRanges = new BlockList();
+for (const [address, prefix] of [
+  ['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8],
+  ['169.254.0.0', 16], ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.0.2.0', 24],
+  ['192.31.196.0', 24], ['192.52.193.0', 24], ['192.88.99.0', 24], ['192.168.0.0', 16],
+  ['192.175.48.0', 24], ['198.18.0.0', 15], ['198.51.100.0', 24], ['203.0.113.0', 24],
+  ['224.0.0.0', 4], ['240.0.0.0', 4]
+] as const) blockedIpRanges.addSubnet(address, prefix, 'ipv4');
+
+// The remaining IPv6 special-purpose blocks are outside 2000::/3 and rejected
+// below. IPv4-mapped IPv6 addresses use the embedded IPv4 address's policy.
+for (const [address, prefix] of [
+  ['2001::', 23], ['2001:db8::', 32], ['2002::', 16],
+  ['2620:4f:8000::', 48], ['3fff::', 20]
+] as const) blockedIpRanges.addSubnet(address, prefix, 'ipv6');
+
+function isBlockedIp(ip: string): boolean {
   const family = isIP(ip);
   if (!family || ip.includes('%')) return true;
   if (family === 6) {
@@ -20,24 +41,15 @@ function isPrivateIp(ip: string): boolean {
     if (mapped) {
       const high = parseInt(mapped[1]!, 16);
       const low = parseInt(mapped[2]!, 16);
-      return isPrivateIp(`${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`);
+      return isBlockedIp(`${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`);
     }
-    // Accept global unicast only. This also excludes local, multicast, NAT64,
-    // and unspecified addresses. Block transition tunnels and documentation IPs.
+    // Restrict native IPv6 to 2000::/3, then apply the special-purpose policy.
+    // This also excludes local, multicast, NAT64, and unspecified addresses.
     const firstHextet = parseInt(normalized.split(':')[0] || '0', 16);
-    return firstHextet < 0x2000 || firstHextet > 0x3fff || normalized.startsWith('2002:') ||
-      normalized.startsWith('2001:0:') || normalized.startsWith('2001::') ||
-      normalized.startsWith('2001:db8:');
+    return firstHextet < 0x2000 || firstHextet > 0x3fff || blockedIpRanges.check(normalized, 'ipv6');
   }
 
-  const [a, b] = ip.split('.').map(Number) as [number, number];
-  if (a === 0 || a === 10 || a === 127) return true;
-  if (a === 100 && b >= 64 && b <= 127) return true;
-  if (a === 169 && b === 254) return true;
-  if (a === 172 && b >= 16 && b <= 31) return true;
-  if (a === 192 && b === 168) return true;
-  if (a === 198 && (b === 18 || b === 19)) return true;
-  return a >= 224;
+  return blockedIpRanges.check(ip, 'ipv4');
 }
 
 /** Resolve once and return the exact address permitted for this request's socket. */
@@ -56,7 +68,7 @@ export async function assertPublicHttpsUrl(url: URL, resolver: Resolver = dnsLoo
   }
   const family = isIP(hostname);
   if (family) {
-    if (isPrivateIp(hostname)) throw new ApiError('FETCH_FAILED', 'Private IP URLs are blocked', 400);
+    if (isBlockedIp(hostname)) throw new ApiError('FETCH_FAILED', 'Non-public or special-purpose IP URLs are blocked', 400);
     return { address: hostname, family };
   }
 
@@ -66,7 +78,7 @@ export async function assertPublicHttpsUrl(url: URL, resolver: Resolver = dnsLoo
   } catch {
     throw new ApiError('FETCH_FAILED', 'DNS lookup failed for URL host', 502, true, 60);
   }
-  if (addresses.length === 0 || addresses.some((entry) => isPrivateIp(entry.address) || isIP(entry.address) !== entry.family)) {
+  if (addresses.length === 0 || addresses.some((entry) => isBlockedIp(entry.address) || isIP(entry.address) !== entry.family)) {
     throw new ApiError('FETCH_FAILED', 'URL resolves to a blocked address', 400);
   }
   return { ...addresses[0]! };

@@ -1,4 +1,4 @@
-import { privateDirectory } from '../scripts/private-files.mjs';
+import { privateDirectory } from './filesystem/private-files.js';
 import { loadConfig } from './config.js';
 import { openDatabase } from './db/connection.js';
 import { createReadingApi } from './api/server.js';

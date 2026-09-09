@@ -13,7 +13,7 @@ import { createReadingApi } from '../api/server.js';
 import { openMemoryDatabase } from '../db/connection.js';
 import { loopbackServiceUrl } from './http-client.js';
 
-const token = 'mcp-test-secret-never-output';
+const token = 'mcp-test-secret-never-output-12345678';
 const cli = resolve('scripts/setup.mjs');
 const envelope = (result: Awaited<ReturnType<Client['callTool']>>) => result.structuredContent as Record<string, unknown>;
 
@@ -167,7 +167,7 @@ test('MCP startup rejects remote origins and missing tokens without stdout or se
   for (const url of ['https://example.com', `http://${token}@127.0.0.1:4727`, 'http://localhost.evil.test', 'file:///tmp/test', 'http://127.0.0.1/path']) {
     assert.throws(() => loopbackServiceUrl(url), /loopback/);
   }
-  assert.equal(loopbackServiceUrl('http://localhost:4727'), 'http://127.0.0.1:4727');
+  assert.equal(loopbackServiceUrl('http://localhost:4727'), 'http://localhost:4727');
   for (const content of [`READING_MEMORY_URL=http://${token}.example.com\nREADING_API_TOKEN=${token}\n`, 'READING_MEMORY_URL=http://127.0.0.1:4727\n']) {
     const envFile = join(dir, 'env');
     writeFileSync(envFile, content);

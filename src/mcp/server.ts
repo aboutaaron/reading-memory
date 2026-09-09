@@ -36,7 +36,7 @@ const definitions: ToolDefinition[] = [
   },
   {
     name: 'brief_events', method: 'POST', path: '/brief-events', schema: BriefEventsRequestSchema,
-    description: 'Record finalized brief outcomes or sources actually cited in a finished answer, never mere retrieval. For answer citations use event_kind=cited, included_bool=true, a stable source_context identifying the answer, and no resurface_after. Do not record a separate cited event for a source already counted as included or resurfaced in the same brief. included and resurfaced require included_bool=true; skipped requires false. Included or resurfaced sources stay suppressed until a new resurface_after schedule makes them eligible; answer citations do not consume brief eligibility. Saving or using a source does not establish reader agreement. Retain the same request_id for retries.'
+    description: 'Record finalized brief outcomes or sources actually cited in a finished answer, never mere retrieval. For answer citations use event_kind=cited, included_bool=true, a required nonblank source_context identifying the answer, and no resurface_after. Use a distinct source_context for each different answer and reuse it for retries; other brief event kinds keep source_context optional. Do not record a separate cited event for a source already counted as included or resurfaced in the same brief. included and resurfaced require included_bool=true; skipped requires false. Included or resurfaced sources stay suppressed until a new resurface_after schedule makes them eligible; answer citations do not consume brief eligibility. Saving or using a source does not establish reader agreement. Retain the same request_id for retries.'
 
   },
   {

@@ -1,9 +1,10 @@
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
+import type { LookupFunction } from 'node:net';
 
 export type ReadingHttpConfig = { url: string; token: string };
 
-/** Pin localhost to its loopback address instead of trusting DNS resolution. */
+/** Validate the loopback origin while retaining its HTTP and TLS identity. */
 export function loopbackServiceUrl(value: string): string {
   let url: URL;
   try { url = new URL(value); } catch { throw new Error('READING_MEMORY_URL must be a loopback HTTP URL'); }
@@ -12,7 +13,6 @@ export function loopbackServiceUrl(value: string): string {
     || url.username || url.password || url.pathname !== '/' || url.search || url.hash) {
     throw new Error('READING_MEMORY_URL must be a loopback HTTP origin without credentials, path, query, or fragment');
   }
-  if (url.hostname === 'localhost') url.hostname = '127.0.0.1';
   return url.origin;
 }
 
@@ -22,7 +22,11 @@ export class ReadingHttpClient {
 
   constructor(config: ReadingHttpConfig) {
     this.url = loopbackServiceUrl(config.url);
-    if (!config.token || /[\r\n]/.test(config.token)) throw new Error('READING_API_TOKEN must be configured');
+    // Short preserved/custom tokens can collide with ordinary API keys during
+    // credential redaction. The generated UUID token already meets this bound.
+    if (!/^[\x21-\x7e]{32,}$/.test(config.token)) {
+      throw new Error('MCP requires READING_API_TOKEN to contain at least 32 non-whitespace ASCII characters; configure the same token for the service and MCP client');
+    }
     this.token = config.token;
   }
 
@@ -45,12 +49,18 @@ export class ReadingHttpClient {
 
   private send(method: string, path: string, body: unknown): Promise<{ status: number; payload: unknown }> {
     const url = new URL(`${this.url}${path}`);
+    const lookup: LookupFunction = (_hostname, options, callback) => {
+      // Keep localhost's original Host/SNI/certificate name, but never resolve it
+      // through system DNS. Literal loopback URLs bypass lookup in Node itself.
+      if (options.all) callback(null, [{ address: '127.0.0.1', family: 4 }]);
+      else callback(null, '127.0.0.1', 4);
+    };
     return new Promise((resolve, reject) => {
       // A fresh direct agent bypasses NODE_USE_ENV_PROXY/global agents. Even an
       // environment configured for a provider proxy must keep this token local.
       // Native HTTP also never follows redirects; reject those explicitly.
       const request = (url.protocol === 'https:' ? httpsRequest : httpRequest)(url, {
-        method, agent: false, signal: AbortSignal.timeout(65_000),
+        method, agent: false, lookup, signal: AbortSignal.timeout(65_000),
         headers: { authorization: `Bearer ${this.token}`, 'content-type': 'application/json' }
       }, async (response) => {
         try {

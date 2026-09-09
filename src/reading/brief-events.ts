@@ -65,6 +65,9 @@ export class BriefEventStore {
       let existingCount = 0;
       for (const event of input.body.events) {
         assertEventKindMatchesIncluded(event.event_kind, event.included_bool);
+        if (event.event_kind === 'cited' && !event.source_context?.trim()) {
+          throw new ApiError('BAD_REQUEST', 'cited events require a nonblank source_context identifying the answer', 400);
+        }
         if (event.event_kind === 'cited' && event.resurface_after != null) {
           throw new ApiError('BAD_REQUEST', 'cited events cannot schedule a brief; use a brief event to resurface an item', 400);
         }

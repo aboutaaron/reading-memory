@@ -83,6 +83,31 @@ test('embedding failures preserve successful ingestion and report a safe lexical
   assert.doesNotMatch(JSON.stringify([ingest, health, query, await request('/activity')]), /private-provider-token/);
 });
 
+test('HTTP lexical policy controls partial matches in FTS, usage mode and hybrid fallback', async t => {
+  const { request } = await fixture(t, null);
+  const ingest = await request('/ingest', { request_id: randomUUID(), source_type: 'text', source: { text: 'Cache invalidation dependencies.' } });
+  assert.equal(ingest.status, 200);
+  for (const mode of ['fts', 'fts+usage', 'hybrid']) {
+    const query = { request_id: randomUUID(), query: 'cache lunar orchard', mode };
+    const compatible = await request('/query', query);
+    assert.equal(compatible.status, 200);
+    assert.equal(compatible.json.data.lexical_policy, 'any');
+    assert.equal(compatible.json.data.results[0].weak_match, true);
+    assert.equal(compatible.json.data.results[0].lexical_coverage, 1 / 3);
+    const strict = await request('/query', { ...query, request_id: randomUUID(), lexical_policy: 'all' });
+    assert.equal(strict.status, 200);
+    assert.equal(strict.json.data.lexical_policy, 'all');
+    assert.deepEqual(strict.json.data.results, []);
+    if (mode === 'hybrid') assert.equal(strict.json.data.fallback_reason, 'embeddings_unavailable');
+    const positive = await request('/query', { ...query, request_id: randomUUID(), query: 'cache dependencies', lexical_policy: 'all' });
+    assert.deepEqual(positive.json.data.citations, [ingest.json.data.item_id]);
+    assert.equal(positive.json.data.results[0].weak_match, false);
+  }
+  const invalid = await request('/query', { request_id: randomUUID(), query: 'cache', lexical_policy: 'confidence' });
+  assert.equal(invalid.status, 400);
+  assert.deepEqual((await request('/capabilities')).json.data.lexical_policies, ['any', 'all']);
+});
+
 test('embedding SDK uses the shared provider configuration and concrete model with fixed dimensions', async t => {
   const seen: any[] = [];
   const server = createServer(async (req, res) => {

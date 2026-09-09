@@ -77,6 +77,12 @@ test('stdio MCP lists typed tools and round-trips capture, recall, annotations, 
   const result = await client.callTool({ name: 'query', arguments: { request_id: randomUUID(), query: 'Cobalt caches' } });
   assert.equal(result.isError, false);
   assert.deepEqual((envelope(result).data as { citations: string[] }).citations, [itemId]);
+  const strict = await client.callTool({ name: 'query', arguments: {
+    request_id: randomUUID(), query: 'Cobalt lunar orchard', lexical_policy: 'all'
+  } });
+  assert.equal(strict.isError, false);
+  assert.equal((envelope(strict).data as { lexical_policy: string }).lexical_policy, 'all');
+  assert.deepEqual((envelope(strict).data as { citations: string[] }).citations, []);
   const annotated = await client.callTool({ name: 'annotations', arguments: {
     item_id: itemId, request_id: randomUUID(), actor_type: 'user', actor: 'Reader', note: 'This matters for my project.'
   } });

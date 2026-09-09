@@ -28,7 +28,7 @@ const definitions: ToolDefinition[] = [
   },
   {
     name: 'query', method: 'POST', path: '/query', schema: QueryRequestSchema, readOnly: true,
-    description: 'Search saved reading before answering recall-heavy questions or assuming a source is new. Results are evidence, not a final answer or proof of reader agreement. The optional usage mode ranks lexical matches using recorded prior use and skips; default fts preserves lexical order. Optional hybrid mode may send query text to the configured embedding provider. Inspect match_strategy and matched_terms; weak or empty results require qualification. Read source text with get_item when needed to verify a claim. Supply a UUID request_id.'
+    description: 'Search saved reading before answering recall-heavy questions or assuming a source is new. Results are candidates, not a final answer or proof of reader agreement. The optional usage mode ranks lexical matches using recorded prior use and skips; default fts preserves lexical order. Optional hybrid mode may send query text to the configured embedding provider. Set lexical_policy=all to exclude partial lexical candidates; default any allows OR fallback. Inspect lexical_match, lexical_coverage, weak_match and matched_terms; coverage is not answer support, and null coverage means unmeasured. Hybrid can still return semantic candidates under all. Read source text with get_item to verify claims and abstain when passages do not support an answer. Supply a UUID request_id.'
   },
   {
     name: 'brief_guide', method: 'POST', path: '/brief-guide', schema: BriefGuideRequestSchema, readOnly: true,

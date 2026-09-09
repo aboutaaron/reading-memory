@@ -103,6 +103,7 @@ export function createReadingApi(
         const body = v.parse(QueryRequestSchema, await readRequestBody());
         const queryInput: Parameters<typeof queryCorpus>[1] = { query: body.query };
         if (body.mode !== undefined && body.mode !== 'hybrid') queryInput.mode = body.mode;
+        if (body.lexical_policy !== undefined) queryInput.lexical_policy = body.lexical_policy;
         if (body.top_k !== undefined) queryInput.topK = body.top_k;
         if (body.filters?.since !== undefined) queryInput.since = body.filters.since;
         if (body.filters?.tags !== undefined) queryInput.tags = body.filters.tags;
@@ -291,6 +292,7 @@ function capabilities() {
   return {
     supported_ingest_types: ['url', 'text', 'pdf_url'],
     query_modes: ['fts', 'fts+usage', 'hybrid'],
+    lexical_policies: ['any', 'all'],
     supports_brief_events: true,
     brief_event_kinds: ['included', 'skipped', 'resurfaced', 'cited'],
     supports_reader_annotations: true,
@@ -299,7 +301,7 @@ function capabilities() {
     supports_stale_items: true,
     analysis_version: READING_ANALYSIS_VERSION,
     query_confidence: 'uncalibrated; null for matches, zero for empty results',
-    query_matching: 'meaningful terms across the full question; AND with explicit partial-term OR fallback',
+    query_matching: 'meaningful terms across the full question; lexical_policy=any defaults to AND with partial-term OR fallback; all requires every extracted term. Coverage is not answer confidence.',
     brief_time_boundary: 'UTC end of brief_date, exclusive next midnight',
     max_sync_response_seconds: LIMITS.maxSyncResponseSeconds,
     idempotency_ttl_seconds: LIMITS.idempotencyTtlSeconds,

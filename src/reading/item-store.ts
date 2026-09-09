@@ -4,12 +4,13 @@ import { transaction, rebuildItemFts } from '../db/connection.js';
 import { ApiError } from '../api/errors.js';
 import { LIMITS } from '../config.js';
 import type { Analysis, ExtractedSource, RelatedItem } from './types.js';
+import { sha256, stableJson } from '../ingest/content-hash.js';
 import { extractSearchTerms, toFtsQuery } from './search-terms.js';
 
 export type IngestResponse = {
   item_id: string;
   status: 'indexed';
-  dedupe_status: 'created' | 'existing' | 'content_changed' | 'idempotent_replay';
+  dedupe_status: 'created' | 'existing' | 'content_changed' | 'idempotent_replay' | 'reanalyzed';
   title: string | null;
   source_uri: string | null;
   content_hash: string;
@@ -45,6 +46,10 @@ export function assertNoInFlightIngest(db: Database, principal: string, requestI
   if (inFlightIngests.get(db)?.has(`${principal}\0${requestId}`)) {
     throw new ApiError('IDEMPOTENCY_CONFLICT', 'request_id is already in progress for an ingest operation', 409);
   }
+  if (db.prepare('SELECT 1 FROM analysis_jobs WHERE principal = ? AND request_id = ? AND expires_at > ?')
+    .get(principal, requestId, new Date().toISOString())) {
+    throw new ApiError('IDEMPOTENCY_CONFLICT', 'request_id is already in progress for a reanalysis operation', 409);
+  }
 }
 
 export class ItemStore {
@@ -65,7 +70,7 @@ export class ItemStore {
       if (existingReplay.payload_hash !== input.payloadHash) {
         throw new ApiError('IDEMPOTENCY_CONFLICT', 'request_id has already been used with a different payload', 409);
       }
-      return normalizeIngestReplay(this.db, JSON.parse(existingReplay.response_snapshot));
+      return normalizeIngestReplay(this.db, parseReplaySnapshot(existingReplay.response_snapshot));
     }
 
     const inFlightKey = `${input.principal}\0${input.requestId}`;
@@ -80,13 +85,129 @@ export class ItemStore {
       };
     }
 
+    assertNoInFlightIngest(this.db, input.principal, input.requestId);
+
+    // A durable monotonic log position distinguishes work already underway when
+    // an item was forgotten from a later intentional capture, even within one ms.
+    const activityBarrier = Number((this.db.prepare('SELECT coalesce(max(id), 0) AS id FROM activity_log').get() as { id: number }).id);
     // Register the operation before any extraction so concurrent retries share network work.
     const promise = Promise.resolve().then(async () => {
       const source = input.source ?? await input.extract();
-      return this.ingestFresh({ ...input, source, analyze: (itemId) => input.analyze(itemId, source) });
+      return this.ingestFresh({ ...input, source, activityBarrier, analyze: (itemId) => input.analyze(itemId, source) });
     }).finally(() => this.inFlight.delete(inFlightKey));
     this.inFlight.set(inFlightKey, { payloadHash: input.payloadHash, promise });
     return await promise;
+  }
+
+  /** Removes canonical content and every cached response that refers to it. */
+  forget(input: { itemId: string; principal: string; requestId?: string }): { item_id: string; deleted: true } {
+    return transaction(this.db, () => {
+      const item = this.db.prepare('SELECT content_hash, status, ingested_at FROM items WHERE id = ?')
+        .get(input.itemId) as { content_hash: string; status: string; ingested_at: string } | undefined;
+      if (!item) throw new ApiError('NOT_FOUND', 'Item not found', 404);
+      if (item.status === 'analyzing' && !isStaleAnalysis(item.ingested_at, new Date().toISOString())) {
+        throw new ApiError('ANALYSIS_IN_PROGRESS', 'This item is being analyzed; retry shortly', 409, true, 10);
+      }
+      this.assertNoActiveReanalysis(input.itemId);
+      // Snapshots can embed another item's quotes in connections, related items,
+      // or a multi-item brief event batch whose item_id column is NULL. Keep the
+      // key as a tombstone so an old retry cannot recreate or reveal forgotten data.
+      this.db.prepare(`UPDATE idempotency_keys SET response_snapshot = '{"forgotten":true}'
+        WHERE item_id = ? OR EXISTS (
+          SELECT 1 FROM json_tree(idempotency_keys.response_snapshot) WHERE value = ?
+        )`).run(input.itemId, input.itemId);
+      this.db.prepare('DELETE FROM item_fts WHERE item_id = ?').run(input.itemId);
+      this.db.prepare('DELETE FROM items WHERE id = ?').run(input.itemId);
+      this.log('item.deleted', input.principal, validOperationalRequestId(input.requestId), null, { content_hash: item.content_hash });
+      return { item_id: input.itemId, deleted: true };
+    });
+  }
+
+  async reanalyze(input: {
+    itemId: string;
+    principal: string;
+    requestId: string;
+    analyze: (itemId: string, source: ExtractedSource) => Promise<Analysis>;
+  }): Promise<IngestResponse> {
+    const payloadHash = sha256(stableJson({ operation: 'item.reanalyze', item_id: input.itemId }));
+    const replay = this.getIdempotency(input.principal, input.requestId);
+    if (replay) {
+      if (replay.payload_hash !== payloadHash) {
+        throw new ApiError('IDEMPOTENCY_CONFLICT', 'request_id has already been used with a different payload', 409);
+      }
+      return normalizeIngestReplay(this.db, parseReplaySnapshot(replay.response_snapshot));
+    }
+    // A duplicate call on the same item is an explicit busy response, even when
+    // it uses the same request ID. Successful retries replay the saved result.
+    this.assertNoActiveReanalysis(input.itemId);
+    assertNoInFlightIngest(this.db, input.principal, input.requestId);
+    const token = randomUUID();
+    const source = transaction(this.db, () => {
+      const now = new Date().toISOString();
+      this.db.prepare('DELETE FROM analysis_jobs WHERE expires_at <= ?').run(now);
+      this.deleteExpiredIdempotency(now);
+      const row = this.db.prepare('SELECT * FROM items WHERE id = ?').get(input.itemId) as {
+        source_type: ExtractedSource['sourceType']; source_uri: string | null; canonical_url: string | null;
+        final_url: string | null; title: string | null; extracted_text: string; author: string | null;
+        publisher: string | null; published_at: string | null; content_hash: string; raw_bytes_hash: string | null;
+        truncated: number; provenance_json: string; status: string;
+      } | undefined;
+      if (!row) throw new ApiError('NOT_FOUND', 'Item not found', 404);
+      if (row.status !== 'indexed') {
+        throw new ApiError('ANALYSIS_IN_PROGRESS', 'Only indexed items can be reanalyzed; complete or retry ingest first', 409, true, 10);
+      }
+      this.assertNoActiveReanalysis(input.itemId);
+      this.db.prepare(`INSERT INTO analysis_jobs (item_id, principal, request_id, payload_hash, token, expires_at)
+        VALUES (?, ?, ?, ?, ?, ?)`).run(input.itemId, input.principal, input.requestId, payloadHash, token,
+        new Date(Date.now() + LIMITS.maxSyncResponseSeconds * 1000).toISOString());
+      this.log('item.reanalysis_started', input.principal, input.requestId, input.itemId, {});
+      return {
+        sourceType: row.source_type, sourceUri: row.source_uri, canonicalUrl: row.canonical_url,
+        finalUrl: row.final_url, title: row.title, extractedText: row.extracted_text, author: row.author,
+        publisher: row.publisher, publishedAt: row.published_at, contentHash: row.content_hash,
+        rawBytesHash: row.raw_bytes_hash, truncated: Boolean(row.truncated), provenance: JSON.parse(row.provenance_json)
+      } satisfies ExtractedSource;
+    });
+    try {
+      const analysis = await input.analyze(input.itemId, source);
+      return transaction(this.db, () => {
+        if (!this.db.prepare('SELECT 1 FROM items WHERE id = ?').get(input.itemId)) {
+          throw new ApiError('NOT_FOUND', 'Item was forgotten during analysis', 404);
+        }
+        if (!this.db.prepare('SELECT 1 FROM analysis_jobs WHERE item_id = ? AND token = ? AND expires_at > ?')
+          .get(input.itemId, token, new Date().toISOString())) {
+          throw new ApiError('ANALYSIS_IN_PROGRESS', 'A newer reanalysis attempt owns this item; retry shortly', 409, true, 10);
+        }
+        this.db.prepare('DELETE FROM tags WHERE item_id = ?').run(input.itemId);
+        this.db.prepare(`DELETE FROM relationships WHERE (from_item_id = ? AND origin = 'model')
+          OR (origin = 'heuristic' AND (from_item_id = ? OR to_item_id = ?))`).run(input.itemId, input.itemId, input.itemId);
+        const now = new Date().toISOString();
+        this.insertAnalysis(input.itemId, analysis, now);
+        this.rebuildFts(input.itemId);
+        const response = this.toIngestResponse(input.itemId, 'reanalyzed', analysis);
+        this.insertIdempotency({ ...input, payloadHash }, response, now, input.itemId);
+        this.log('item.reanalyzed', input.principal, input.requestId, input.itemId, {
+          analysis_version: analysis.analysis_version, model: analysis.model, tag_count: analysis.tags.length
+        });
+        return response;
+      });
+    } catch (error) {
+      transaction(this.db, () => {
+        const retained = this.db.prepare('SELECT 1 FROM items WHERE id = ?').get(input.itemId);
+        this.log('item.reanalysis_failed', input.principal, input.requestId, retained ? input.itemId : null,
+          { error_class: error instanceof Error ? error.name : 'UnknownError' });
+      });
+      throw error;
+    } finally {
+      this.db.prepare('DELETE FROM analysis_jobs WHERE item_id = ? AND token = ?').run(input.itemId, token);
+    }
+  }
+
+  private assertNoActiveReanalysis(itemId: string) {
+    if (this.db.prepare('SELECT 1 FROM analysis_jobs WHERE item_id = ? AND expires_at > ?')
+      .get(itemId, new Date().toISOString())) {
+      throw new ApiError('ANALYSIS_IN_PROGRESS', 'This item is already being analyzed; retry shortly', 409, true, 10);
+    }
   }
 
   private async ingestFresh(input: {
@@ -94,13 +215,22 @@ export class ItemStore {
     requestId: string;
     payloadHash: string;
     source: ExtractedSource;
+    activityBarrier: number;
     analyze: (itemId: string) => Promise<Analysis>;
   }): Promise<IngestResponse> {
     const now = new Date().toISOString();
     const prepared = transaction(this.db, () => {
       this.deleteExpiredIdempotency(now);
+      const forgottenDuringExtraction = this.db.prepare(`SELECT 1 FROM activity_log
+        WHERE type = 'item.deleted' AND id > ? AND json_extract(metadata_json, '$.content_hash') = ? LIMIT 1`)
+        .get(input.activityBarrier, input.source.contentHash);
+      if (forgottenDuringExtraction) {
+        this.insertIdempotency(input, { forgotten: true }, now, null);
+        return { forgotten: true as const };
+      }
       const duplicate = this.findByContentHash(input.source.contentHash);
       if (duplicate) {
+        this.assertNoActiveReanalysis(duplicate.id);
         if (duplicate.status === 'analyzing') {
           if (isStaleAnalysis(duplicate.ingested_at, now)) {
             this.db.prepare("UPDATE items SET status = 'analyzing', ingested_at = ? WHERE id = ?").run(now, duplicate.id);
@@ -155,6 +285,9 @@ export class ItemStore {
         JSON.stringify(input.source.provenance)
       );
 
+      if (this.db.prepare("SELECT 1 FROM activity_log WHERE type = 'item.deleted' AND json_extract(metadata_json, '$.content_hash') = ? LIMIT 1").get(input.source.contentHash)) {
+        this.log('ingest.previously_forgotten', input.principal, input.requestId, itemId, { content_hash: input.source.contentHash });
+      }
       this.log('ingest.analysis_started', input.principal, input.requestId, itemId, {
         source_type: input.source.sourceType,
         content_hash: input.source.contentHash
@@ -162,6 +295,9 @@ export class ItemStore {
       return { itemId, dedupeStatus: changedSource ? 'content_changed' as const : 'created' as const, attemptStartedAt: now };
     });
 
+    if ('forgotten' in prepared) {
+      throw new ApiError('ITEM_FORGOTTEN', 'This content was forgotten after ingestion began; use a new request_id only for an intentional capture', 410);
+    }
     if ('response' in prepared) return prepared.response;
 
     try {
@@ -187,7 +323,8 @@ export class ItemStore {
         const failed = this.db.prepare("UPDATE items SET status = 'failed' WHERE id = ? AND status = 'analyzing' AND ingested_at = ?")
           .run(prepared.itemId, prepared.attemptStartedAt);
         const eventType = failed.changes === 0 ? 'ingest.analysis_failed_stale' : 'ingest.analysis_failed';
-        this.log(eventType, input.principal, input.requestId, prepared.itemId, {
+        const retainedItem = this.db.prepare('SELECT id FROM items WHERE id = ?').get(prepared.itemId);
+        this.log(eventType, input.principal, input.requestId, retainedItem ? prepared.itemId : null, {
           source_type: input.source.sourceType,
           content_hash: input.source.contentHash,
           error_class: error instanceof Error ? error.name : 'UnknownError'
@@ -250,6 +387,7 @@ export class ItemStore {
 
   private responseForStaleSuccess(itemId: string): IngestResponse {
     const item = this.db.prepare('SELECT status FROM items WHERE id = ?').get(itemId) as { status: string } | undefined;
+    if (!item) throw new ApiError('NOT_FOUND', 'Item was forgotten during analysis', 404);
     if (item?.status === 'indexed') return this.responseForExisting(itemId, 'existing');
     if (item?.status === 'failed') {
       throw new ApiError('ANALYSIS_FAILED', 'A newer analysis attempt failed for this item', 502, true, 30);
@@ -339,9 +477,9 @@ export class ItemStore {
 
   private insertIdempotency(
     input: { principal: string; requestId: string; payloadHash: string },
-    response: IngestResponse,
+    response: IngestResponse | { forgotten: true },
     now: string,
-    itemId: string
+    itemId: string | null
   ) {
     const expires = new Date(Date.parse(now) + 7 * 24 * 60 * 60 * 1000).toISOString();
     this.db.prepare(`
@@ -406,7 +544,7 @@ export class ItemStore {
     }));
   }
 
-  private log(type: string, principal: string, requestId: string, itemId: string | null, metadata: Record<string, unknown>) {
+  private log(type: string, principal: string, requestId: string | null, itemId: string | null, metadata: Record<string, unknown>) {
     this.db.prepare(`
       INSERT INTO activity_log (type, principal, request_id, item_id, metadata_json, created_at)
       VALUES (?, ?, ?, ?, ?, ?)
@@ -430,4 +568,17 @@ function normalizeIngestReplay(db: Database, snapshot: IngestResponse): IngestRe
     published_at: Object.hasOwn(snapshot, 'published_at') ? snapshot.published_at : item?.published_at ?? null,
     related_items: Array.isArray(snapshot.related_items) ? snapshot.related_items : []
   };
+}
+
+/** Invalidated cached responses must not replay forgotten content from any API. */
+export function parseReplaySnapshot<T = IngestResponse>(snapshot: string): T {
+  const value = JSON.parse(snapshot);
+  if (value?.forgotten === true) {
+    throw new ApiError('ITEM_FORGOTTEN', 'This request referenced forgotten content; use a new request_id for an intentional new operation', 410);
+  }
+  return value as T;
+}
+
+function validOperationalRequestId(requestId: string | undefined): string | null {
+  return requestId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(requestId) ? requestId : null;
 }

@@ -188,7 +188,7 @@ test('fresh databases omit the unused sessions table', () => {
 for (const legacyState of ['missing', 'empty', 'populated'] as const) {
   test(`v4 migration handles a ${legacyState} legacy sessions table without losing data`, () => {
     const db = openMemoryDatabase();
-    db.exec('PRAGMA user_version = 3');
+    db.exec('DROP TABLE analysis_jobs; PRAGMA user_version = 3');
     if (legacyState !== 'missing') {
       db.exec('CREATE TABLE sessions (id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at TEXT NOT NULL)');
       if (legacyState === 'populated') {

@@ -98,3 +98,6 @@ export type Envelope<T> = {
   data: T | null;
   error: unknown | null;
 };
+
+export const ReanalyzeRequestSchema = v.strictObject({ request_id: RequestIdSchema });
+export type ReanalyzeRequest = v.InferOutput<typeof ReanalyzeRequestSchema>;

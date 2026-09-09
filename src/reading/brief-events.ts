@@ -4,7 +4,7 @@ import { transaction } from '../db/connection.js';
 import { ApiError } from '../api/errors.js';
 import type { BriefEventsRequest } from '../api/contracts.js';
 import { sha256, stableJson } from '../ingest/content-hash.js';
-import { assertNoInFlightIngest } from './item-store.js';
+import { assertNoInFlightIngest, parseReplaySnapshot } from './item-store.js';
 
 export type BriefEventRecord = {
   id: string;
@@ -56,7 +56,7 @@ export class BriefEventStore {
           throw new ApiError('IDEMPOTENCY_CONFLICT', 'request_id has already been used with a different payload', 409);
         }
         return {
-          ...JSON.parse(replay.response_snapshot) as BriefEventsResponse,
+          ...parseReplaySnapshot<BriefEventsResponse>(replay.response_snapshot),
           dedupe_status: 'idempotent_replay'
         };
       }

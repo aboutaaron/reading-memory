@@ -104,7 +104,8 @@ function assertEmptyV0Database(db: Database) {
     'activity_log',
     'item_fts',
     'brief_events',
-    'reader_annotations'
+    'reader_annotations',
+    'analysis_jobs'
   ];
   const placeholders = appTables.map(() => '?').join(',');
   const rows = db.prepare(`

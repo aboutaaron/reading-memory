@@ -303,3 +303,20 @@ The deployed default path is:
 ```
 
 Reading Memory sends one bounded structured request through an official provider SDK. SDK retries are disabled, cancellation reaches the provider, incomplete/refused/invalid outputs fail analysis, and no conversation state is stored. Schema v4 omits the unused `sessions` table in new databases and removes it on upgrade only when empty. Nonempty legacy tables and their rows are preserved; the current analyzer does not read or write them. Analyzer health checks local credentials and provider configuration without network calls; valid configuration is not proof of live provider access.
+
+### Forget an item
+
+`DELETE /items/:id` requires bearer authentication and shares the ingest rate limit. It accepts no body or query parameters. It deletes canonical item content, analysis history, tags, relationships, reader notes, brief events, and FTS in one transaction; newer items' `supersedes_item_id` references become null. Active analysis returns 409 `ANALYSIS_IN_PROGRESS`; a missing item returns 404. Success returns `{item_id, deleted: true}`. The activity log retains only the content hash and operational identifiers, never a free-form reason.
+
+Idempotency snapshots containing the item (including other items' connection evidence and multi-item brief batches) become content-free tombstones. Their original request IDs return 410 `ITEM_FORGOTTEN`, preventing accidental replay or recapture. A fresh intentional capture uses a new request ID and logs `ingest.previously_forgotten`. Forgetting does not rewrite separate backup files.
+
+
+### Refresh stored analysis
+
+`POST /items/:id/reanalyze` accepts exactly `{request_id: UUID}` behind bearer authentication, shares the ingest rate limit, and has the same 60-second response budget. It analyzes stored text with the original caller context and current reader notes; it never fetches the source URL again. Success uses the ingest response shape with `dedupe_status: "reanalyzed"`. Retrying a completed request ID replays that response; request IDs remain shared across ingestion, reanalysis, annotations, and brief events.
+
+Reanalysis preserves the item ID, capture time, source, provenance, reader notes, and brief history. It retains all earlier analysis rows and atomically replaces current tags, outgoing model relationships, heuristic relationships, and FTS. Incoming model relationships remain valid because the cited source text has not changed. Existing query and brief results remain available while the new judgment is running. A failed attempt leaves the previous judgment intact. Concurrent reanalysis, duplicate ingestion, or forgetting the item returns `ANALYSIS_IN_PROGRESS`; schema v5 leases permit recovery after a process crash and prevent a late attempt from overwriting its successor.
+
+`/health` includes `analysis.current_version`, `analysis.current_model`, and `analysis.stale_items`. Authenticated `GET /items?stale=true&limit=25` returns metadata for up to 100 indexed items whose latest analysis version or model differs from the service. Prompt or relationship-rule changes must bump `READING_ANALYSIS_VERSION`; changing the configured model also marks earlier results stale.
+
+Run `npm run reanalyze -- --stale --limit 25` with the service's `READING_API_TOKEN`, host, and port configuration after an upgrade. The maintenance command processes one bounded batch through the loopback API, waits six seconds between items, and retries transient failures up to three times with the same request ID and exponential backoff (honoring retry delays up to 60 seconds). It prints item IDs and completion counts only and exits unsuccessfully if any item fails. Re-run for another batch after inspecting failures.

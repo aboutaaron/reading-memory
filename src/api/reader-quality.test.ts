@@ -87,7 +87,7 @@ test('ingest replays and conflicts bypass unavailable URL extraction and preserv
     extractor: async (body) => {
       calls += 1;
       if (calls > 1) throw new Error('remote source unavailable');
-      return extractSource({ ...body, source_type: 'text', source: { type: 'text', text: 'Cache invalidation requires explicit dependencies.' } });
+      return extractSource({ ...body, source_type: 'text', source: { text: 'Cache invalidation requires explicit dependencies.' } });
     },
     analyzer: async ({ readerContext }) => { observed = readerContext; return analysis; }
   });
@@ -103,6 +103,23 @@ test('rejects impossible brief dates and overlong reader context before invoking
   const { post } = await fixture(t);
   assert.equal((await post('/brief-guide', { request_id: randomUUID(), brief_date: '2026-02-30' })).status, 400);
   assert.equal((await post('/ingest', { ...textRequest(), ingest_reason: 'x'.repeat(4001) })).status, 400);
+});
+
+test('legacy ingest type replays through the sole discriminator and mismatches fail before extraction', async (t) => {
+  let extractions = 0;
+  const { post } = await fixture(t, {
+    extractor: async (body) => {
+      extractions += 1;
+      assert.equal('type' in body.source, false);
+      return extractSource(body);
+    }
+  });
+  const request = textRequest();
+  const legacy = { ...request, source: { ...request.source, type: 'text' } };
+  assert.equal((await post('/ingest', legacy)).status, 200);
+  assert.equal((await post('/ingest', request)).payload.data.dedupe_status, 'idempotent_replay');
+  assert.equal((await post('/ingest', { ...legacy, source: { ...legacy.source, type: 'url' } })).status, 400);
+  assert.equal(extractions, 1);
 });
 
 test('item details omit source text by default and opt-in returns exactly the stored text with evidence and truncation', async (t) => {

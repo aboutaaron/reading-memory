@@ -7,17 +7,38 @@ export const DateSchema = v.pipe(v.string(), v.regex(/^\d{4}-\d{2}-\d{2}$/), v.c
 }, 'Expected a valid calendar date'));
 const TitleSchema = v.optional(v.pipe(v.string(), v.maxLength(300)));
 
-export const IngestRequestSchema = v.object({
+const IngestCommonFields = {
   request_id: RequestIdSchema,
-  source_type: v.picklist(['url', 'text', 'pdf_url']),
-  source: v.variant('type', [
-    v.object({ type: v.literal('url'), url: v.pipe(v.string(), v.url()), title: TitleSchema }),
-    v.object({ type: v.literal('text'), text: v.string(), title: TitleSchema }),
-    v.object({ type: v.literal('pdf_url'), url: v.pipe(v.string(), v.url()), title: TitleSchema })
-  ]),
   source_context: v.optional(v.pipe(v.string(), v.maxLength(1000))),
   ingest_reason: v.optional(v.pipe(v.string(), v.maxLength(4000)))
-});
+};
+
+export const IngestRequestSchema = v.variant('source_type', [
+  v.object({
+    ...IngestCommonFields,
+    source_type: v.literal('text'),
+    source: v.pipe(
+      v.object({ type: v.optional(v.literal('text')), text: v.string(), title: TitleSchema }),
+      v.transform(({ type: _legacyType, ...source }) => source)
+    )
+  }),
+  v.object({
+    ...IngestCommonFields,
+    source_type: v.literal('url'),
+    source: v.pipe(
+      v.object({ type: v.optional(v.literal('url')), url: v.pipe(v.string(), v.url()), title: TitleSchema }),
+      v.transform(({ type: _legacyType, ...source }) => source)
+    )
+  }),
+  v.object({
+    ...IngestCommonFields,
+    source_type: v.literal('pdf_url'),
+    source: v.pipe(
+      v.object({ type: v.optional(v.literal('pdf_url')), url: v.pipe(v.string(), v.url()), title: TitleSchema }),
+      v.transform(({ type: _legacyType, ...source }) => source)
+    )
+  })
+]);
 
 export const QueryRequestSchema = v.object({
   request_id: RequestIdSchema,

@@ -16,7 +16,6 @@ test('normalizes and hashes text after redaction', async () => {
     request_id: '00000000-0000-4000-8000-000000000010',
     source_type: 'text',
     source: {
-      type: 'text',
       text: 'To: aaron@example.com\n\nAgent memory needs durable recall.',
       title: 'Note'
     }
@@ -32,7 +31,6 @@ test('infers canonical URL from newsletter text captures', async () => {
     request_id: '00000000-0000-4000-8000-000000000011',
     source_type: 'text',
     source: {
-      type: 'text',
       text: 'View this post on the web at https://example.com/post?utm_source=email#comments\n\nArticle body.',
       title: 'Newsletter capture'
     }
@@ -46,7 +44,6 @@ test('ignores invalid canonical URL hints in text captures', async () => {
     request_id: '00000000-0000-4000-8000-000000000012',
     source_type: 'text',
     source: {
-      type: 'text',
       text: 'canonical url: https://[::broken\n\nArticle body.',
       title: 'Newsletter capture'
     }
@@ -57,7 +54,7 @@ test('ignores invalid canonical URL hints in text captures', async () => {
 
 test('captures URL article metadata and prefers explicit caller titles', async () => {
   const html = '<html><head><title>Original heading</title><meta name="author" content="Ada Reader"><meta property="og:site_name" content="Memory Journal"><meta property="article:published_time" content="2026-09-01T12:00:00Z"></head><body><article><p>Remember the original evidence behind this claim.</p></article></body></html>';
-  const source = await extractSource({ request_id: REQUEST_ID, source_type: 'url', source: { type: 'url', url: 'https://example.com/article', title: 'Reader supplied title' } }, undefined, { fetchUrl: async () => fetched(html) });
+  const source = await extractSource({ request_id: REQUEST_ID, source_type: 'url', source: { url: 'https://example.com/article', title: 'Reader supplied title' } }, undefined, { fetchUrl: async () => fetched(html) });
   assert.equal(source.title, 'Reader supplied title');
   assert.equal(source.author, 'Ada Reader');
   assert.equal(source.publisher, 'Memory Journal');
@@ -67,14 +64,14 @@ test('captures URL article metadata and prefers explicit caller titles', async (
 });
 
 test('preserves literal plain text from URLs without interpreting markup', async () => {
-  const source = await extractSource({ request_id: REQUEST_ID, source_type: 'url', source: { type: 'url', url: 'https://example.com/note.txt' } }, undefined, { fetchUrl: async () => fetched('Types: Array<T> &amp; literal.\n\n<script>Not executable HTML</script>', 'text/plain') });
+  const source = await extractSource({ request_id: REQUEST_ID, source_type: 'url', source: { url: 'https://example.com/note.txt' } }, undefined, { fetchUrl: async () => fetched('Types: Array<T> &amp; literal.\n\n<script>Not executable HTML</script>', 'text/plain') });
   assert.equal(source.extractedText, 'Types: Array<T> &amp; literal.\n\n<script>Not executable HTML</script>');
   assert.equal(source.title, null);
   assert.equal(source.provenance.extractor, 'text');
 });
 
 test('captures PDF metadata and explicit PDF title precedence', async () => {
-  const request = { request_id: REQUEST_ID, source_type: 'pdf_url' as const, source: { type: 'pdf_url' as const, url: 'https://example.com/paper.pdf' } };
+  const request = { request_id: REQUEST_ID, source_type: 'pdf_url' as const, source: { url: 'https://example.com/paper.pdf' } };
   const dependencies = { fetchUrl: async () => fetched('fake PDF bytes', 'application/pdf'), extractPdfText: async () => ({ text: 'Paper text.', pages: 2, title: 'Metadata title', author: 'Sam Author' }) };
   const source = await extractSource(request, undefined, dependencies);
   assert.equal(source.title, 'Metadata title');
@@ -87,7 +84,7 @@ test('captures PDF metadata and explicit PDF title precedence', async () => {
 });
 
 test('long fetched sources with equal retained text have distinct full hashes', async () => {
-  const request = { request_id: REQUEST_ID, source_type: 'url' as const, source: { type: 'url' as const, url: 'https://example.com/long.txt' } };
+  const request = { request_id: REQUEST_ID, source_type: 'url' as const, source: { url: 'https://example.com/long.txt' } };
   const prefix = 'x'.repeat(LIMITS.maxExtractedChars);
   const first = await extractSource(request, undefined, { fetchUrl: async () => fetched(`${prefix} ending one`, 'text/plain') });
   const second = await extractSource(request, undefined, { fetchUrl: async () => fetched(`${prefix} ending two`, 'text/plain') });
@@ -99,6 +96,6 @@ test('long fetched sources with equal retained text have distinct full hashes', 
 });
 
 test('rejects empty captured text and empty extracted HTML', async () => {
-  await assert.rejects(extractSource({ request_id: REQUEST_ID, source_type: 'text', source: { type: 'text', text: ' \n\t' } }), (error: unknown) => error instanceof ApiError && error.code === 'BAD_REQUEST');
-  await assert.rejects(extractSource({ request_id: REQUEST_ID, source_type: 'url', source: { type: 'url', url: 'https://example.com/empty' } }, undefined, { fetchUrl: async () => fetched('<html><body><script>Only code</script></body></html>') }), (error: unknown) => error instanceof ApiError && error.code === 'FETCH_FAILED');
+  await assert.rejects(extractSource({ request_id: REQUEST_ID, source_type: 'text', source: { text: ' \n\t' } }), (error: unknown) => error instanceof ApiError && error.code === 'BAD_REQUEST');
+  await assert.rejects(extractSource({ request_id: REQUEST_ID, source_type: 'url', source: { url: 'https://example.com/empty' } }, undefined, { fetchUrl: async () => fetched('<html><body><script>Only code</script></body></html>') }), (error: unknown) => error instanceof ApiError && error.code === 'FETCH_FAILED');
 });

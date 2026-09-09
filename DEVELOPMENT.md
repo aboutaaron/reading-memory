@@ -121,6 +121,8 @@ For local development, copy `.env.example` and override only the values you need
 
 ## API
 
+`POST /ingest` uses `source_type` as its sole discriminator: `text` requires `source.text`, while `url` and `pdf_url` require `source.url`. All accept optional `source.title`. A legacy nested `source.type` is accepted only when it agrees with `source_type`, then discarded during validation. Existing idempotency hashes remain compatible, so an equivalent request replays across this contract update. Callers should omit the nested type. This document and `src/api/contracts.ts` define request shapes; `/capabilities` advertises supported operations and limits.
+
 All non-health endpoints require:
 
 ```text

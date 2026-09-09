@@ -4,6 +4,7 @@ import { once } from 'node:events';
 import { createServer } from 'node:http';
 import { createEmbeddingProvider } from './embedding-provider.js';
 import { EMBEDDING_DIMENSIONS } from './embeddings.js';
+import { isLoaderDeprecationWarning } from '../test-support/runtime-warnings.js';
 
 test('embedding SDK suppresses source, query and credential logging even with OPENAI_LOG=debug', async t => {
   const previousLogLevel = process.env.OPENAI_LOG;
@@ -45,5 +46,13 @@ test('embedding SDK suppresses source, query and credential logging even with OP
   assert.equal((await embedder.embed(inputs[0]!)).length, EMBEDDING_DIMENSIONS);
   await assert.rejects(embedder.embed(inputs[1]!));
   assert.deepEqual(seen, inputs.map(input => ({ authorization: 'Bearer fixture-embedding-token', input })));
-  assert.equal(logs.length, 0, 'provider requests and failures must not emit SDK debug logs');
+  const captured = JSON.stringify(logs);
+  for (const privateValue of [...inputs, 'fixture-embedding-token']) {
+    assert.equal(captured.includes(privateValue), false, 'source, query and credentials must never be logged');
+  }
+  // The tsx startup warning may arrive after console capture begins on Node 26.
+  // SDK output, additional arguments, and all other warnings still fail.
+  const unexpectedLogs = logs.filter(args => !(args.length === 1 &&
+    typeof args[0] === 'string' && isLoaderDeprecationWarning(args[0])));
+  assert.deepEqual(unexpectedLogs, [], 'provider requests and failures must not emit SDK debug logs');
 });

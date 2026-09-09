@@ -34,6 +34,9 @@ test('database and sidecar symlinks are rejected without touching their targets'
   const root = mkdtempSync(join(tmpdir(), 'reading-symlink-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const outside = join(root, 'outside'); writeFileSync(outside, 'untouched', { mode: 0o644 });
+  // A requested creation mode is filtered by umask. Keep this target explicitly
+  // permissive so an accidental chmod through a symlink remains detectable.
+  chmodSync(outside, 0o644);
   const dbPath = join(root, 'reading.sqlite');
   symlinkSync(outside, dbPath);
   assert.throws(() => openDatabase(dbPath), /regular, unlinked file/);

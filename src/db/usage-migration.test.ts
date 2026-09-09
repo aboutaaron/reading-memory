@@ -12,7 +12,7 @@ test('usage migration preserves v5 brief history, duplicate guards, and cascade 
   const schema = readFileSync(new URL('./schema.sql', import.meta.url), 'utf8')
     .replace("'included', 'skipped', 'resurfaced', 'cited'", "'included', 'skipped', 'resurfaced'");
   db.exec(schema);
-  db.exec('PRAGMA user_version = 5');
+  db.exec('DROP TABLE item_embeddings; PRAGMA user_version = 5');
   db.exec(`INSERT INTO items (id, source_type, ingested_at, content_hash, status, extracted_text)
     VALUES ('reading', 'text', '2026-08-01T00:00:00.000Z', 'hash', 'indexed', 'source text')`);
   db.exec(`INSERT INTO brief_events VALUES

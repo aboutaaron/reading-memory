@@ -131,3 +131,13 @@ CREATE TABLE IF NOT EXISTS analysis_jobs (
   expires_at TEXT NOT NULL,
   UNIQUE (principal, request_id)
 );
+
+CREATE TABLE item_embeddings (
+  item_id TEXT PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE,
+  analysis_id TEXT NOT NULL REFERENCES analyses(id) ON DELETE CASCADE,
+  model TEXT NOT NULL,
+  dimensions INTEGER NOT NULL CHECK (dimensions = 1536),
+  input_hash TEXT NOT NULL,
+  embedding BLOB NOT NULL,
+  updated_at TEXT NOT NULL
+);

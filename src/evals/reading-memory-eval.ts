@@ -5,6 +5,7 @@ import { briefGuide } from '../reading/brief-guide.js';
 import { getItem, queryCorpus } from '../reading/corpus-query.js';
 import { ItemStore } from '../reading/item-store.js';
 import { ReaderAnnotationStore } from '../reading/reader-annotations.js';
+import { runHybridRetrievalEval } from './hybrid-retrieval-eval.js';
 import { readingMemoryBriefFixtures } from './reading-memory-brief-fixtures.js';
 import {
   EVAL_BRIEF_DATE, EVAL_INGESTED_AT, fixture,
@@ -14,7 +15,7 @@ import {
 
 export type ReadingMemoryEvalResult = {
   fixture_id: string;
-  check: 'query_recall' | 'brief_selection' | 'memory_durability';
+  check: 'query_recall' | 'brief_selection' | 'memory_durability' | 'hybrid_retrieval';
   passed: boolean;
   details: Record<string, unknown>;
 };
@@ -107,6 +108,7 @@ export async function runReadingMemoryEval(): Promise<ReadingMemoryEvalResult[]>
       briefDb.close();
     }
   }
+  results.push(...await runHybridRetrievalEval());
   return results;
 }
 
@@ -114,18 +116,21 @@ export function summarizeReadingMemoryEval(results: ReadingMemoryEvalResult[]) {
   const queries = results.filter((result) => result.check === 'query_recall');
   const recall = queries.map((result) => result.details.recall_at_5).filter((value): value is number => typeof value === 'number');
   const briefs = results.filter((result) => result.check === 'brief_selection');
+  const hybrid = results.filter((result) => result.check === 'hybrid_retrieval');
   const countLists = (rows: ReadingMemoryEvalResult[], key: string) => rows.reduce(
     (sum, row) => sum + (Array.isArray(row.details[key]) ? row.details[key].length : 0), 0
   );
   return {
     fixture_id: 'summary', check: 'summary', passed: results.every((result) => result.passed),
-    scope: 'Synthetic deterministic regression; canned analyses; no live model or private corpus',
+    scope: 'Synthetic deterministic regression; canned analyses and embedding vectors; no live model or private corpus',
     checks: results.length, passed_checks: results.filter((result) => result.passed).length,
     query_cases: queries.length, positive_query_cases: recall.length,
     mean_recall_at_5: recall.length ? recall.reduce((sum, value) => sum + value, 0) / recall.length : null,
     unsupported_query_false_positives: queries.filter((result) => Number(result.details.unsupported_result_count) > 0).length,
     unsupported_result_false_positives: queries.reduce((sum, result) => sum + Number(result.details.unsupported_result_count), 0),
     unsupported_answers: queries.filter((result) => result.details.unsupported_answer === true).length,
+    hybrid_cases: hybrid.length,
+    passed_hybrid_cases: hybrid.filter((result) => result.passed).length,
     brief_cases: briefs.length,
     irrelevant_brief_selections: countLists(briefs, 'irrelevant_selections'),
     missed_due_items: countLists(briefs, 'missed_due_items'),

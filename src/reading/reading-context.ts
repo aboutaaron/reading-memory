@@ -45,6 +45,7 @@ export function buildReadingContext(db: Database, input: {
   title: string | null;
   text: string;
   readerContext?: CallerReadingContext;
+  priorItemIds?: string[];
 }) {
   const readerContext = {
     source_context: bounded(input.readerContext?.source_context, READING_CONTEXT_LIMITS.callerContextChars),
@@ -60,9 +61,9 @@ export function buildReadingContext(db: Database, input: {
     ),
     ...extractFrequentSearchTerms(input.text, TERM_BUDGETS.source)
   ])];
-  if (terms.length === 0) return { reader_context: readerContext, prior_items: [] as PriorReadingItem[] };
+  if (terms.length === 0 && !input.priorItemIds?.length) return { reader_context: readerContext, prior_items: [] as PriorReadingItem[] };
 
-  const rows = db.prepare(`
+  const rows = terms.length ? db.prepare(`
     SELECT i.id AS item_id, i.title, i.extracted_text,
       coalesce((SELECT a.summary FROM analyses a WHERE a.item_id = i.id ORDER BY a.created_at DESC, a.rowid DESC LIMIT 1), '') AS summary
     FROM item_fts
@@ -75,9 +76,21 @@ export function buildReadingContext(db: Database, input: {
     title: string | null;
     extracted_text: string;
     summary: string;
-  }>;
+  }> : [];
 
-  const priorItems: PriorReadingItem[] = rows.map((row) => ({
+  const ranks = new Map(rows.map((row, index) => [row.item_id, 1 / (61 + index)]));
+  const byId = new Map(rows.map(row => [row.item_id, row]));
+  for (const [index, id] of [...new Set(input.priorItemIds ?? [])].slice(0, 5).entries()) {
+    const row = db.prepare(`SELECT i.id AS item_id, i.title, i.extracted_text,
+      coalesce((SELECT summary FROM analyses WHERE item_id = i.id ORDER BY created_at DESC, rowid DESC LIMIT 1), '') AS summary
+      FROM items i WHERE i.id = ? AND i.id <> ? AND i.status = 'indexed'`).get(id, input.itemId) as typeof rows[number] | undefined;
+    if (!row) continue;
+    byId.set(id, row);
+    ranks.set(id, (ranks.get(id) ?? 0) + 1 / (61 + index));
+  }
+  const candidates = [...byId.values()].sort((a, b) => (ranks.get(b.item_id)! - ranks.get(a.item_id)!)
+    || a.item_id.localeCompare(b.item_id)).slice(0, READING_CONTEXT_LIMITS.priorItems);
+  const priorItems: PriorReadingItem[] = candidates.map((row) => ({
     item_id: row.item_id,
     title: bounded(row.title, 240),
     summary: row.summary.slice(0, 800),

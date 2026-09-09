@@ -16,6 +16,8 @@ export type RelatedItem = {
   match_reason: string;
 };
 export type Analysis = {
+  /** Transient optional index projection; never included in API snapshots. */
+  embedding?: import('./embeddings.js').Embedding | null;
   summary: string;
   claims: string[];
   relevance: { score: number; themes: string[] };

@@ -1,3 +1,6 @@
+import { createEmbeddingProvider } from '../reading/embedding-provider.js';
+import { embedAnalysis, embeddingHealth, vectorNeighbors, type Embedder } from '../reading/embeddings.js';
+import { queryHybridCorpus } from '../reading/hybrid-query.js';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { existsSync, readdirSync, statfsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -15,7 +18,8 @@ import {
   createFlueReadingAnalyzer,
   flueAnalyzerHealth,
   type AnalyzerHealth,
-  type ReadingAnalyzer
+  type ReadingAnalyzer,
+  type ReadingAnalyzerInput
 } from '../reading/flue-agent.js';
 import { extractSource, payloadHash } from '../reading/extract-source.js';
 import { PDF_PARSE_LIMITS } from '../ingest/extract-pdf.js';
@@ -29,14 +33,16 @@ import { observeRequest, type RequestOutcomeLogger } from './request-outcomes.js
 export function createReadingApi(
   config: AppConfig,
   db: Database,
-  options: { analyzer?: ReadingAnalyzer; analyzerHealth?: () => AnalyzerHealth; extractor?: typeof extractSource; requestLogger?: RequestOutcomeLogger | null } = {}
+  options: { embedder?: Embedder | null; analyzer?: ReadingAnalyzer; analyzerHealth?: () => AnalyzerHealth; extractor?: typeof extractSource; requestLogger?: RequestOutcomeLogger | null } = {}
 ) {
   const limiter = new RateLimiter({ ingest: 10, query: 30, brief: 10, annotation: 30 });
   const store = new ItemStore(db);
   const briefEventStore = new BriefEventStore(db);
   const annotations = new ReaderAnnotationStore(db);
   const extractor = options.extractor ?? extractSource;
-  const analyzer = options.analyzer ?? createFlueReadingAnalyzer(db, { model: config.flueModel, tracePath: config.flueTracePath });
+  const embedder = options.embedder === undefined ? createEmbeddingProvider(config.embeddingModel) : options.embedder;
+  const baseAnalyzer = options.analyzer ?? createFlueReadingAnalyzer(db, { model: config.flueModel, tracePath: config.flueTracePath });
+  const analyzer = createEmbeddingReadingAnalyzer(db, baseAnalyzer, embedder);
   const analyzerHealth = options.analyzerHealth ?? (options.analyzer
     ? () => ({ status: 'ok' as const, warn: false })
     : () => flueAnalyzerHealth(config.flueModel));
@@ -63,7 +69,7 @@ export function createReadingApi(
       setSecurityHeaders(res);
 
       if (req.method === 'GET' && url.pathname === '/health') {
-        return send(res, 200, { ok: true, request_id: requestId, data: health(db, config, analyzerHealth()), error: null });
+        return send(res, 200, { ok: true, request_id: requestId, data: { ...health(db, config, analyzerHealth()), embeddings: embeddingHealth(db, embedder?.model ?? null) }, error: null });
       }
 
       const principal = requireAuth(req, config.authToken);
@@ -85,7 +91,7 @@ export function createReadingApi(
           analyze: (itemId, source) => withTimeout(
             (signal) => analyzer({ itemId, title: source.title, text: source.extractedText,
               readerContext: { source_context: body.source_context ?? null, ingest_reason: body.ingest_reason ?? null },
-              sessionId: `analysis:${itemId}:${body.request_id}`, signal }),
+              sessionId: `analysis:${itemId}:${body.request_id}`, signal, deadline }),
             remainingMs(deadline)
           )
         });
@@ -96,11 +102,11 @@ export function createReadingApi(
         limiter.check(principal, 'query');
         const body = v.parse(QueryRequestSchema, await readRequestBody());
         const queryInput: Parameters<typeof queryCorpus>[1] = { query: body.query };
-        if (body.mode !== undefined) queryInput.mode = body.mode;
+        if (body.mode !== undefined && body.mode !== 'hybrid') queryInput.mode = body.mode;
         if (body.top_k !== undefined) queryInput.topK = body.top_k;
         if (body.filters?.since !== undefined) queryInput.since = body.filters.since;
         if (body.filters?.tags !== undefined) queryInput.tags = body.filters.tags;
-        const data = queryCorpus(db, queryInput);
+        const data = body.mode === 'hybrid' ? await queryHybridCorpus(db, queryInput, embedder) : queryCorpus(db, queryInput);
         return send(res, 200, { ok: true, request_id: body.request_id, data, error: null });
       }
 
@@ -149,7 +155,7 @@ export function createReadingApi(
             readerContext: {
               source_context: typeof source.provenance.source_context === 'string' ? source.provenance.source_context : null,
               ingest_reason: typeof source.provenance.ingest_reason === 'string' ? source.provenance.ingest_reason : null
-            }, sessionId: `analysis:${itemId}:${body.request_id}`, signal }), remainingMs(deadline)) });
+            }, sessionId: `analysis:${itemId}:${body.request_id}`, signal, deadline }), remainingMs(deadline)) });
         return send(res, 200, { ok: true, request_id: body.request_id, data, error: null });
       }
 
@@ -194,6 +200,33 @@ export function createReadingApi(
       return send(res, status, { ok: false, request_id: requestId, data: null, error: toErrorPayload(normalized) });
     }
   });
+}
+
+/** Optional semantic context and indexing share the request budget without consuming its save margin. */
+export function createEmbeddingReadingAnalyzer(db: Database, baseAnalyzer: ReadingAnalyzer, embedder: Embedder | null): ReadingAnalyzer {
+  return async (input) => {
+    const priorItemIds = embedder ? await optionalEmbedding(input, async (signal) => {
+      const vector = await embedder.embed([input.title ?? '', input.text].join('\n').slice(0, 16_000), signal);
+      return vectorNeighbors(db, vector, embedder.model, { topK: 5, excludeItemId: input.itemId })
+        .filter(hit => hit.distance <= 0.5).map(hit => hit.item_id);
+    }) ?? [] : [];
+    // Keep the original request signal on model work; optional timeouts only cancel their own calls.
+    const analysis = await baseAnalyzer({ ...input, priorItemIds });
+    const embedding = embedder ? await optionalEmbedding(input,
+      (signal) => embedAnalysis(embedder, input.title, analysis, signal)) : null;
+    return { ...analysis, embedding };
+  };
+}
+
+async function optionalEmbedding<T>(input: ReadingAnalyzerInput, fn: (signal: AbortSignal) => Promise<T>): Promise<T | null> {
+  const ms = Math.min(5000, (input.deadline ?? Infinity) - Date.now() - 250);
+  if (ms <= 0 || input.signal?.aborted) return null;
+  try {
+    return await withTimeout((signal) => fn(input.signal ? AbortSignal.any([input.signal, signal]) : signal), ms);
+  } catch {
+    // Race the provider against the timeout even when it ignores cancellation; lexical analysis stays usable.
+    return null;
+  }
 }
 
 function assertAllowedHost(req: IncomingMessage, config: AppConfig) {
@@ -257,7 +290,7 @@ function setSecurityHeaders(res: ServerResponse) {
 function capabilities() {
   return {
     supported_ingest_types: ['url', 'text', 'pdf_url'],
-    query_modes: ['fts', 'fts+usage'],
+    query_modes: ['fts', 'fts+usage', 'hybrid'],
     supports_brief_events: true,
     brief_event_kinds: ['included', 'skipped', 'resurfaced', 'cited'],
     supports_reader_annotations: true,

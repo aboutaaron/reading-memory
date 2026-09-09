@@ -137,6 +137,7 @@ export function getItem(db: Database, itemId: string, options: { includeText?: b
   const usage = getUsageStats(db, itemId);
   const analysis = db.prepare('SELECT * FROM analyses WHERE item_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1').get(itemId) as Record<string, unknown> | undefined;
   const tags = db.prepare('SELECT tag, reason, confidence FROM tags WHERE item_id = ? ORDER BY confidence DESC').all(itemId);
+  const embedding = db.prepare('SELECT model, analysis_id FROM item_embeddings WHERE item_id = ?').get(itemId) as { model: string; analysis_id: string } | undefined;
   const relationships = db.prepare('SELECT from_item_id, to_item_id, relation_type, explanation, confidence, origin, evidence_json FROM relationships WHERE from_item_id = ? OR to_item_id = ?').all(itemId, itemId) as Array<Omit<Relationship, 'evidence'> & { evidence_json: string | null }>;
   return {
     item_id: item.id,
@@ -145,6 +146,8 @@ export function getItem(db: Database, itemId: string, options: { includeText?: b
     source_uri: item.source_uri,
     title: item.title,
     content_hash: item.content_hash,
+    embedding_status: embedding?.analysis_id === analysis?.id && embedding ? 'indexed' : 'missing',
+    embedding_model: embedding?.model ?? null,
     truncated: Boolean(item.truncated),
     usage_count: usage.usage_count,
     last_used_at: usage.last_used_at,

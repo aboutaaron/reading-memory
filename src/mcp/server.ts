@@ -28,7 +28,7 @@ const definitions: ToolDefinition[] = [
   },
   {
     name: 'query', method: 'POST', path: '/query', schema: QueryRequestSchema, readOnly: true,
-    description: 'Search saved reading before answering recall-heavy questions or assuming a source is new. Results are evidence, not a final answer or proof of reader agreement. The optional usage mode ranks lexical matches using recorded prior use and skips; default fts preserves lexical order. Inspect match_strategy and matched_terms; weak or empty results require qualification. Read source text with get_item when needed to verify a claim. Supply a UUID request_id.'
+    description: 'Search saved reading before answering recall-heavy questions or assuming a source is new. Results are evidence, not a final answer or proof of reader agreement. The optional usage mode ranks lexical matches using recorded prior use and skips; default fts preserves lexical order. Optional hybrid mode may send query text to the configured embedding provider. Inspect match_strategy and matched_terms; weak or empty results require qualification. Read source text with get_item when needed to verify a claim. Supply a UUID request_id.'
   },
   {
     name: 'brief_guide', method: 'POST', path: '/brief-guide', schema: BriefGuideRequestSchema, readOnly: true,
@@ -75,7 +75,7 @@ export function createReadingMcpServer(config: ReadingHttpConfig) {
       // Custom Valibot checks (calendar dates and non-whitespace notes) cannot
       // be represented in JSON Schema; runtime validation still enforces them.
       inputSchema: { ...toJsonSchema(tool.schema, { errorMode: 'ignore' }), type: 'object' } as Tool['inputSchema'],
-      annotations: { readOnlyHint: !!tool.readOnly, destructiveHint: !!tool.destructive, openWorldHint: ['ingest', 'reanalyze'].includes(tool.name) }
+      annotations: { readOnlyHint: !!tool.readOnly, destructiveHint: !!tool.destructive, openWorldHint: ['ingest', 'query', 'reanalyze'].includes(tool.name) }
     }))
   }));
   server.setRequestHandler(CallToolRequestSchema, async (request) => {

@@ -46,7 +46,10 @@ export function backfillTitles(db: Database, apply = false) {
           title_backfill: { version: 1, inferred: true, source: 'stored_text', applied_at: new Date().toISOString() }
         };
         const result = update.run(candidate.proposed_title, JSON.stringify(provenance), candidate.item_id);
-        if (Number(result.changes) > 0) { rebuildItemFts(db, candidate.item_id); applied++; }
+        if (Number(result.changes) > 0) {
+          db.prepare('DELETE FROM item_embeddings WHERE item_id = ?').run(candidate.item_id);
+          rebuildItemFts(db, candidate.item_id); applied++;
+        }
       }
     });
   }

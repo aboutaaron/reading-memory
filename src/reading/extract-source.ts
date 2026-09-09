@@ -55,7 +55,7 @@ export async function extractSource(request: IngestRequest, signal?: AbortSignal
   }
 
   const explicitTitle = cleanMetadata('title' in request.source ? request.source.title : null);
-  let capture: { text: string; title: string | null; author: string | null; publisher: string | null; publishedAt: string | null; extractor: string; titleSource: string | null; pages?: number };
+  let capture: { text: string; title: string | null; author: string | null; publisher: string | null; publishedAt: string | null; extractor: string; titleSource: string | null; pages?: number; completeness?: 'unknown' };
   if (fetched.mime === 'application/pdf') {
     const pdf = await (dependencies.extractPdfText ?? extractPdfText)(fetched.bytes, signal);
     capture = { ...pdf, publisher: null, publishedAt: null, extractor: 'pdf', titleSource: pdf.title ? 'pdf-metadata' : null };
@@ -65,7 +65,7 @@ export async function extractSource(request: IngestRequest, signal?: AbortSignal
     capture = extractHtml(new TextDecoder().decode(fetched.bytes), fetched.finalUrl);
   }
   const normalized = normalizeContent(capture.text);
-  if (!normalized.text) throw new ApiError('FETCH_FAILED', 'Source contains no readable text', 422);
+  if (!normalized.text) throw new ApiError('FETCH_FAILED', 'Source contains no usable article text; it may contain only page controls or require a different capture', 422);
 
   return {
     sourceType: request.source_type,
@@ -87,6 +87,7 @@ export async function extractSource(request: IngestRequest, signal?: AbortSignal
       original_url: url,
       final_url: fetched.finalUrl,
       extractor: capture.extractor,
+      ...(capture.completeness ? { extraction_completeness: capture.completeness } : {}),
       title_source: explicitTitle ? 'explicit' : capture.titleSource,
       truncated: normalized.truncated,
       extracted_chars: normalized.extractedChars,

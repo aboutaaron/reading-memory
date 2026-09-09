@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { extractHtml } from './extract-html.js';
+import { Readability } from '@mozilla/readability';
 
 test('extracts article text and metadata while excluding page chrome', () => {
   const html = readFileSync(new URL('./fixtures/article.html', import.meta.url), 'utf8');
@@ -61,4 +62,201 @@ test('uses JSON-LD article metadata and bounds title metadata', () => {
   assert.equal(article.publishedAt, '2026-08-01T10:00:00.000Z');
   const longTitle = extractHtml(`<html><head><title>${'a'.repeat(900)}</title></head><body><p>Readable body.</p></body></html>`);
   assert.equal(longTitle.title?.length, 500);
+});
+
+const structured = (body: Record<string, unknown> | Record<string, unknown>[]) =>
+  `<html><head><script type="application/ld+json">${JSON.stringify(body)}</script></head><body><nav><a href="/">Home</a></nav><div><p>We use cookies to personalize content.</p><button>Accept all</button></div></body></html>`;
+const publicArticle = (articleBody: string) => ({ '@context': 'https://schema.org', '@type': 'NewsArticle', isAccessibleForFree: true, articleBody });
+
+test('rejects consent-only shells, navigation-only pages, and metadata descriptions', () => {
+  for (const html of [
+    '<main><h1>We value your privacy</h1><p>We use cookies to personalize content and measure traffic.</p><p>By clicking accept, you agree to our cookie policy.</p><button>Accept all</button><a href="/privacy">Privacy policy</a></main>',
+    '<div><h1>News</h1><a href="/a">Latest stories</a><a href="/b">Opinion</a><button>Search</button></div>',
+    '<html><head><meta name="description" content="A very useful description of the article."></head><body><nav>Home</nav></body></html>',
+    structured({ '@context': 'https://schema.org', '@type': 'NewsArticle', description: 'A description is not a captured article.' })
+  ]) assert.equal(extractHtml(html).text, '');
+});
+
+test('keeps short substantive notes and articles discussing cookies and privacy', () => {
+  for (const text of [
+    'The vote passed.',
+    'Cookies are small records stored by a browser.',
+    'Privacy laws changed the design of consent dialogs.',
+    'We use cookies in this experiment. The measurements show a decrease in repeated requests.'
+  ]) {
+    const article = extractHtml(`<article><h1>Privacy</h1><p>${text}</p></article>`);
+    assert.ok(article.text.includes(text));
+    assert.equal(article.completeness, 'unknown');
+  }
+});
+
+test('recovers explicitly public schema.org articleBody without running scripts or loading resources', () => {
+  const html = structured(publicArticle('A stored article can survive a failed client render.\n\nIts actual body is available in structured data.'))
+    .replace('</body>', '<script>throw new Error("must never execute")</script><img src="http://127.0.0.1/private"></body>');
+  const result = extractHtml(html);
+  assert.equal(result.extractor, 'structured-article-body');
+  assert.equal(result.text, 'A stored article can survive a failed client render.\n\nIts actual body is available in structured data.');
+  assert.equal(result.completeness, 'unknown');
+  assert.doesNotMatch(result.text, /cookies|must never execute/);
+  const graph = extractHtml(structured({ '@context': 'https://schema.org', '@graph': [publicArticle('Graph-wrapped article text.')] }));
+  assert.equal(graph.text, 'Graph-wrapped article text.');
+});
+
+test('structured fallback rejects restricted, unqualified, ambiguous, oversized, and malformed bodies', () => {
+  for (const record of [
+    { ...publicArticle('Restricted article.'), isAccessibleForFree: false },
+    { ...publicArticle('Unknown access article.'), isAccessibleForFree: undefined },
+    { ...publicArticle('Unrecognized body.'), '@type': 'Product' },
+    { ...publicArticle('Unqualified context.'), '@context': 'https://example.com/schema' },
+    [publicArticle('First candidate.'), publicArticle('Different candidate.')],
+    publicArticle('a'.repeat(256_001)),
+    publicArticle('We use cookies to remember your settings.')
+  ]) assert.equal(extractHtml(structured(record)).text, '');
+  assert.equal(extractHtml('<main><script type="application/ld+json">{broken</script><script type="application/json">{"articleBody":"Framework state is not a supported article."}</script></main>').text, '');
+});
+
+test('prefers readable visible content and supports server-rendered articleBody markup', () => {
+  const html = structured(publicArticle('Different structured body.')).replace('<nav>', '<article><p>The visible article has priority.</p></article><nav>');
+  assert.match(extractHtml(html).text, /The visible article has priority\./);
+  assert.doesNotMatch(extractHtml(html).text, /Different structured body/);
+  const ssr = extractHtml('<main><div itemprop="articleBody"><p>Server-rendered evidence is available without running a client.</p></div><script>startClient()</script></main>');
+  assert.match(ssr.text, /Server-rendered evidence/);
+  assert.doesNotMatch(ssr.text, /startClient/);
+});
+
+test('structured fallback fails closed when its inspection budget cannot rule out ambiguity', () => {
+  const manyScripts = '<html><head>' + Array.from({ length: 17 }, () => `<script type="application/ld+json">${JSON.stringify(publicArticle('Possible article.'))}</script>`).join('') + '</head><body></body></html>';
+  assert.equal(extractHtml(manyScripts).text, '');
+  const tooManyNodes = { '@context': 'https://schema.org', '@graph': [publicArticle('First article.'), ...Array.from({ length: 513 }, () => ({ '@type': 'Thing' }))] };
+  assert.equal(extractHtml(structured(tooManyNodes)).text, '');
+  let nested: Record<string, unknown> = publicArticle('Deep article.');
+  for (let i = 0; i < 10; i += 1) nested = { '@graph': nested };
+  assert.equal(extractHtml(structured({ '@context': 'https://schema.org', '@graph': [publicArticle('First article.'), nested] })).text, '');
+});
+
+test('structured fallback cannot attribute an explicitly unrelated article to the fetched URL', () => {
+  const page = 'https://example.com/current';
+  for (const identity of [
+    { url: 'https://example.com/recommended' },
+    { '@id': 'https://example.com/recommended#article' },
+    { mainEntityOfPage: 'https://example.com/recommended' },
+    { mainEntityOfPage: { '@type': 'WebPage', '@id': 'https://example.com/recommended' } },
+    { url: page, mainEntityOfPage: { '@id': 'https://example.com/recommended' } },
+    { url: 'http://[' },
+    { url: 'javascript:alert(1)' },
+    { mainEntityOfPage: { '@type': 'WebPage' } }
+  ]) assert.equal(extractHtml(structured({ ...publicArticle('Unrelated article must not be attributed here.'), ...identity }), page).text, '');
+  for (const identity of [
+    { url: page + '#article' },
+    { '@id': '#article', mainEntityOfPage: { '@type': 'WebPage', '@id': page + '#webpage' } },
+    { url: '/current', mainEntityOfPage: { url: page } }
+  ]) assert.equal(extractHtml(structured({ ...publicArticle('Matching current article.'), ...identity }), page + '#fragment').text, 'Matching current article.');
+});
+
+test('keeps an authored single-sentence cookie article without accepting a consent-control shell', () => {
+  const sentence = 'We use cookies to maintain authenticated sessions in our application.';
+  assert.equal(extractHtml(`<article><p>${sentence}</p></article>`).text, sentence);
+  assert.equal(extractHtml(`<div itemprop="articleBody"><p>${sentence}</p></div>`).text, sentence);
+  assert.equal(extractHtml(`<main><p>We use cookies to personalize content.</p><button>Accept all</button></main>`).text, '');
+  assert.equal(extractHtml(`<article><p>We use cookies to personalize content.</p><button>Accept all</button></article>`).text, '');
+  assert.equal(extractHtml(`<article><p>We use cookies to personalize content.</p><form><button>Accept all</button></form></article>`).text, '');
+});
+
+test('shell classification preserves complete technical statements regardless of their prefix or markup', () => {
+  for (const sentence of [
+    'We use cookies in this experiment.',
+    'By clicking the icon twice, users can reset the cache.',
+    'We use cookies to maintain authenticated sessions in our application.',
+    'We process personal data only inside the isolated test environment.'
+  ]) {
+    assert.equal(extractHtml(`<main><p>${sentence}</p></main>`).text, sentence);
+    assert.equal(extractHtml(structured(publicArticle(sentence))).text, sentence);
+  }
+});
+
+test('visible fallback skips placeholders and boilerplate before selecting the first usable root', (t) => {
+  t.mock.method(Readability.prototype, 'parse', () => null);
+  for (const html of [
+    '<div itemprop="articleBody"></div><article><p>Usable later article.</p></article>',
+    '<div itemprop="articleBody"></div><main><p>Usable later article.</p></main>',
+    '<div itemprop="articleBody"></div><div itemprop="articleBody"><p>Usable later article.</p></div>',
+    '<div itemprop="articleBody"><p>We use cookies to personalize content.</p></div><div itemprop="articleBody"><p>Usable later article.</p></div>',
+    '<article><p>We use cookies to personalize content.</p></article><article><p>Usable later article.</p></article>',
+    '<main><p>We use cookies to personalize content.</p></main><main><p>Usable later article.</p></main>'
+  ]) {
+    const result = extractHtml(html);
+    assert.equal(result.extractor, 'html-fallback');
+    assert.equal(result.text, 'Usable later article.');
+  }
+  const first = extractHtml('<div itemprop="articleBody"><p>First substantive body.</p></div><div itemprop="articleBody"><p>Later substantive body.</p></div>');
+  assert.equal(first.text, 'First substantive body.');
+});
+
+test('structured fallback recognizes bounded local schema.org vocabulary contexts without remote resolution', () => {
+  for (const context of [
+    { '@vocab': 'https://schema.org/' },
+    ['https://schema.org', { '@vocab': 'https://schema.org/' }],
+    [{ '@vocab': 'http://schema.org/' }]
+  ]) {
+    const result = extractHtml(structured({ ...publicArticle('Locally recognized context.'), '@context': context }));
+    assert.equal(result.text, 'Locally recognized context.');
+    assert.equal(result.extractor, 'structured-article-body');
+  }
+  for (const context of [
+    ['https://schema.org', { '@vocab': 'https://example.com/other' }],
+    { '@vocab': 'https://schema.org/', articleBody: 'https://example.com/description' },
+    ['https://schema.org', 'https://example.com/remote-context'],
+    Array.from({ length: 17 }, () => 'https://schema.org'),
+    [],
+    [['https://schema.org']]
+  ]) assert.equal(extractHtml(structured({ ...publicArticle('Unqualified context body.'), '@context': context })).text, '');
+  const overridden = { '@context': 'https://schema.org', '@graph': [{ ...publicArticle('Overridden nested context.'), '@context': { '@vocab': 'https://example.com/other' } }] };
+  assert.equal(extractHtml(structured(overridden)).text, '');
+});
+
+test('structured fallback uses its matched headline and never a rejected shell heading', () => {
+  const shell = (record: Record<string, unknown> | Record<string, unknown>[]) => structured(record).replace('<body>', '<body><h1>Your privacy</h1>');
+  const titled = extractHtml(shell({ ...publicArticle('Actual public article body.'), headline: '  Actual\n article headline  ' }));
+  assert.equal(titled.title, 'Actual article headline');
+  assert.equal(titled.titleSource, 'article');
+  assert.equal(titled.extractor, 'structured-article-body');
+  const untitled = extractHtml(shell(publicArticle('Actual public article body.')));
+  assert.equal(untitled.title, null);
+  assert.equal(untitled.titleSource, null);
+  const conflicting = extractHtml(shell([
+    { ...publicArticle('Same actual body.'), headline: 'First headline' },
+    { ...publicArticle('Same actual body.'), headline: 'Conflicting headline' }
+  ]));
+  assert.equal(conflicting.text, 'Same actual body.');
+  assert.equal(conflicting.title, null);
+  assert.equal(conflicting.titleSource, null);
+  const bounded = extractHtml(shell({ ...publicArticle('Actual public article body.'), headline: 'a'.repeat(900) }));
+  assert.equal(bounded.title?.length, 500);
+});
+
+test('keeps linked prose inside article paragraphs and quotations while rejecting navigation labels', () => {
+  const sentence = 'Version 2.0 is now available with improved keyboard support.';
+  for (const tag of ['p', 'blockquote']) {
+    for (const text of [sentence, sentence.slice(0, -1)]) {
+      const result = extractHtml(`<article><h1>Release notes</h1><${tag}><a href="https://example.test/release">${text}</a></${tag}></article>`, 'https://example.test/article');
+      assert.ok(result.text.includes(text));
+    }
+  }
+  for (const html of [
+    '<article><h1>Your privacy</h1><p><a href="/privacy">Privacy policy.</a></p><p><a href="/consent">Accept all.</a></p></article>',
+    '<div><a href="/news">Latest stories</a><a href="/opinion">Opinion</a></div>',
+    '<div><a href="/release">Version 2.0 is now available with improved keyboard support</a></div>',
+    '<article><p><a href="/news">Latest stories</a></p></article>'
+  ]) assert.equal(extractHtml(html).text, '');
+});
+
+test('anonymous structured articles cannot borrow attribution from a conflicting explicit page graph', () => {
+  const page = 'https://example.test/article';
+  const container = (pageUrl: string, identity: Record<string, unknown> = {}) => ({ '@context': 'https://schema.org', '@graph': [
+    { '@type': 'WebPage', url: pageUrl },
+    { ...publicArticle('Structured article body.'), ...identity }
+  ] });
+  assert.equal(extractHtml(structured(container('https://example.test/other')), page).text, '');
+  assert.equal(extractHtml(structured(container(page)), page).text, 'Structured article body.');
+  assert.equal(extractHtml(structured(container('https://example.test/other', { mainEntityOfPage: page })), page).text, 'Structured article body.');
 });

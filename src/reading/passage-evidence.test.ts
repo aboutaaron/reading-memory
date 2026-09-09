@@ -91,3 +91,12 @@ test('legacy quote callers keep exact validation and cannot cite target summarie
     assert.deepEqual(normalizeAnalysis(db, raw.item_id, result, 'custom', { text: raw.text, priorItems: raw.prior_items }).relationships, []);
   } finally { db.close(); }
 });
+
+
+test('payload carries upstream truncation even when its text is already within the limit', () => {
+  assert.equal(prepareProviderAnalysisInput({ ...raw, source_text_truncated: true }).source_text_truncated, true);
+  assert.equal(prepareProviderAnalysisInput({ ...raw, source_text_truncated: false }).source_text_truncated, false);
+  assert.equal(prepareProviderAnalysisInput(raw).source_text_truncated, false);
+  assert.equal(prepareProviderAnalysisInput({ ...raw, source_text_truncated: false,
+    text: 'x'.repeat(LIMITS.maxExtractedChars + 1) }).source_text_truncated, true);
+});

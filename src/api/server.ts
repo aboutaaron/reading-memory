@@ -100,7 +100,7 @@ export function createReadingApi(
           payloadHash: payloadHash(body),
           extract: () => withTimeout((signal) => extractor(body, signal), remainingMs(deadline)),
           analyze: (itemId, source) => withTimeout(
-            (signal) => analyzer({ itemId, title: source.title, text: source.extractedText,
+            (signal) => analyzer({ itemId, title: source.title, text: source.extractedText, sourceTextTruncated: source.truncated,
               readerContext: { source_context: body.source_context ?? null, ingest_reason: body.ingest_reason ?? null },
               sessionId: `analysis:${itemId}:${body.request_id}`, signal, deadline }),
             remainingMs(deadline)
@@ -175,7 +175,7 @@ export function createReadingApi(
         const deadline = Date.now() + LIMITS.maxSyncResponseSeconds * 1000;
         const body = v.parse(ReanalyzeRequestSchema, await readRequestBody());
         const data = await store.reanalyze({ principal, requestId: body.request_id, itemId: reanalyzeMatch[1],
-          analyze: (itemId, source) => withTimeout((signal) => analyzer({ itemId, title: source.title, text: source.extractedText,
+          analyze: (itemId, source) => withTimeout((signal) => analyzer({ itemId, title: source.title, text: source.extractedText, sourceTextTruncated: source.truncated,
             readerContext: {
               source_context: typeof source.provenance.source_context === 'string' ? source.provenance.source_context : null,
               ingest_reason: typeof source.provenance.ingest_reason === 'string' ? source.provenance.ingest_reason : null

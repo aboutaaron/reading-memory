@@ -31,6 +31,7 @@ export type IngestResponse = {
 
 type InFlightIngest = { payloadHash: string; promise: Promise<IngestResponse> };
 const inFlightIngests = new WeakMap<Database, Map<string, InFlightIngest>>();
+const FORGOTTEN_REQUEST_EXPIRY = '9999-12-31T23:59:59.999Z';
 
 function inFlightFor(db: Database) {
   let pending = inFlightIngests.get(db);
@@ -109,13 +110,23 @@ export class ItemStore {
         throw new ApiError('ANALYSIS_IN_PROGRESS', 'This item is being analyzed; retry shortly', 409, true, 10);
       }
       this.assertNoActiveReanalysis(input.itemId);
+      // Failed and interrupted attempts have durable start events but no success
+      // snapshot. Recover their request IDs before deleting the item's FK links,
+      // including attempts made before this version was installed.
+      const now = new Date().toISOString();
+      this.db.prepare(`INSERT OR IGNORE INTO idempotency_keys
+        (principal, request_id, payload_hash, item_id, response_snapshot, created_at, expires_at)
+        SELECT DISTINCT principal, request_id, '', item_id, '{"forgotten":true}', ?, ?
+        FROM activity_log WHERE item_id = ? AND request_id IS NOT NULL AND type IN
+          ('ingest.analysis_started', 'ingest.analysis_retry', 'ingest.analysis_retry_stale')`)
+        .run(now, FORGOTTEN_REQUEST_EXPIRY, input.itemId);
       // Snapshots can embed another item's quotes in connections, related items,
       // or a multi-item brief event batch whose item_id column is NULL. Keep the
       // key as a tombstone so an old retry cannot recreate or reveal forgotten data.
-      this.db.prepare(`UPDATE idempotency_keys SET response_snapshot = '{"forgotten":true}'
+      this.db.prepare(`UPDATE idempotency_keys SET response_snapshot = '{"forgotten":true}', expires_at = ?
         WHERE item_id = ? OR EXISTS (
           SELECT 1 FROM json_tree(idempotency_keys.response_snapshot) WHERE value = ?
-        )`).run(input.itemId, input.itemId);
+        )`).run(FORGOTTEN_REQUEST_EXPIRY, input.itemId, input.itemId);
       this.db.prepare('DELETE FROM item_fts WHERE item_id = ?').run(input.itemId);
       this.db.prepare('DELETE FROM items WHERE id = ?').run(input.itemId);
       this.log('item.deleted', input.principal, validOperationalRequestId(input.requestId), null, { content_hash: item.content_hash });
@@ -468,11 +479,15 @@ export class ItemStore {
   }
 
   private getIdempotency(principal: string, requestId: string) {
-    return this.db.prepare(`
+    const replay = this.db.prepare(`
       SELECT payload_hash, response_snapshot
       FROM idempotency_keys
       WHERE principal = ? AND request_id = ? AND expires_at > ?
     `).get(principal, requestId, new Date().toISOString()) as { payload_hash: string; response_snapshot: string } | undefined;
+    // A forgotten failed attempt may have no original payload hash. Its request
+    // ID is retired regardless of payload, before extraction or provider work.
+    if (replay) parseReplaySnapshot(replay.response_snapshot);
+    return replay;
   }
 
   private insertIdempotency(
@@ -481,7 +496,8 @@ export class ItemStore {
     now: string,
     itemId: string | null
   ) {
-    const expires = new Date(Date.parse(now) + 7 * 24 * 60 * 60 * 1000).toISOString();
+    const expires = 'forgotten' in response ? FORGOTTEN_REQUEST_EXPIRY
+      : new Date(Date.parse(now) + 7 * 24 * 60 * 60 * 1000).toISOString();
     this.db.prepare(`
       INSERT INTO idempotency_keys (principal, request_id, payload_hash, item_id, response_snapshot, created_at, expires_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)

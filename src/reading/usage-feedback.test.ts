@@ -113,3 +113,24 @@ test('cited events replay and deduplicate safely, reject inconsistent intent, an
   ] }), /Item not found/);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM brief_events').get()?.n, 1);
 });
+
+test('store rejects missing or blank cited answer contexts without recording a partial batch', t => {
+  const db = openMemoryDatabase();
+  t.after(() => db.close());
+  item(db, 'reading');
+  const store = new BriefEventStore(db);
+  const event = { item_id: 'reading', brief_date: '2026-09-09', event_kind: 'cited',
+    included_bool: true, rationale: 'Supports the finalized answer.' };
+  for (const context of [undefined, '', ' \t\n']) {
+    const requestId = randomUUID();
+    // Exercise the store boundary directly with an unvalidated runtime caller.
+    const body = { request_id: requestId, events: [
+      { ...event, source_context: 'answer:valid' },
+      { ...event, ...(context === undefined ? {} : { source_context: context }) }
+    ] } as unknown as BriefEventsRequest;
+    assert.throws(() => store.record({ principal: 'test', requestId,
+      payloadHash: briefEventsPayloadHash(body), body }), /nonblank source_context/);
+    assert.equal(db.prepare('SELECT count(*) AS n FROM brief_events').get()?.n, 0);
+    assert.equal(db.prepare('SELECT 1 FROM idempotency_keys WHERE request_id = ?').get(requestId), undefined);
+  }
+});

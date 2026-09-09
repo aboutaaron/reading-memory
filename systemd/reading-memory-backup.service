@@ -2,6 +2,7 @@
 Description=Back up Reading Memory SQLite database
 
 [Service]
+UMask=0077
 Type=oneshot
 WorkingDirectory=%h/reading-memory
 EnvironmentFile=%h/.reading-api/env

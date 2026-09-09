@@ -1,4 +1,5 @@
-import { mkdirSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
+import { privateDatabasePath } from '../../scripts/private-files.mjs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
@@ -10,8 +11,8 @@ const SCHEMA = readFileSync(join(__dirname, 'schema.sql'), 'utf8');
 export type Database = DatabaseSync;
 
 export function openDatabase(dbPath: string): Database {
-  mkdirSync(dirname(dbPath), { recursive: true });
-  const db = new DatabaseSync(dbPath);
+  const privatePath = privateDatabasePath(dbPath, { create: true });
+  const db = new DatabaseSync(privatePath);
   configureDatabase(db);
   migrate(db);
   reconcileFts(db);

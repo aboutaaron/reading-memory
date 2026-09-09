@@ -192,6 +192,10 @@ systemctl --user status reading-memory.service
 
 The unit binds to loopback and stores data outside the git checkout at `~/.reading-api/reading.sqlite`.
 
+Before storing real reading material on each deployment, verify the host itself: confirm deny-by-default firewall rules with required SSH access retained, at least 15 GB of free disk space, an authenticated localhost smoke request, and a listener restricted to `127.0.0.1`. Run a backup and restore drill on disposable data and check file ownership and permissions. Repository tests do not certify a host's firewall, storage or service installation.
+
+Choose operational retention explicitly: backups retain 30 days by default; configure journald limits for service logs and rotate local JSONL traces according to the host's retention policy. Keep logs and traces private. Probe `/health` from a local monitor and alert when `ready` is false or disk/backup warnings appear. To rotate the bearer token, update the private environment file, restart the service, and update the local caller's secret; never put the token in logs or issue reports.
+
 ## Backup And Restore
 
 Daily backup command:

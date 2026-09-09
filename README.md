@@ -207,3 +207,5 @@ Use this when the question is not "can my agent read this?" but "can my agent re
 ## Development
 
 For manual wiring, API examples, local development, deployment, backups, validation, and trace inspection, see [DEVELOPMENT.md](DEVELOPMENT.md).
+
+Track planned work in [GitHub issues](https://github.com/aboutaaron/reading-memory/issues). The [historical backlog audit](docs/backlog-migration.md) records what shipped and where remaining work moved.

@@ -25,7 +25,8 @@ function testConfig(dataDir: string, overrides: Partial<AppConfig> = {}): AppCon
   };
 }
 
-test('ingests text, queries it, and exposes item detail without logging raw text', async () => {
+test('ingests text, queries it, and exposes item detail without logging raw text', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-05-04T23:30:00.000Z') });
   const db = openMemoryDatabase();
   const dataDir = mkdtempSync(join(tmpdir(), 'reading-api-test-'));
   const server = createReadingApi(testConfig(dataDir), db, {
@@ -64,7 +65,8 @@ test('ingests text, queries it, and exposes item detail without logging raw text
   }).then((res) => res.json() as Promise<any>);
 
   assert.equal(query.ok, true);
-  assert.ok(query.data.answer.includes(`[${ingest.data.item_id}]`));
+  assert.equal(query.data.answer, '');
+  assert.equal(query.data.confidence, null);
   assert.deepEqual(query.data.citations, [ingest.data.item_id]);
 
   const emptyQuery = await fetch(`${base}/query`, {
@@ -222,12 +224,14 @@ test('ingests text, queries it, and exposes item detail without logging raw text
   await new Promise<void>((resolve) => server.close(() => resolve()));
 });
 
-test('validates brief events and applies resurfacing rules', async () => {
+test('validates brief events and applies resurfacing rules', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-05-04T23:30:00.000Z') });
   const db = openMemoryDatabase();
   const dataDir = mkdtempSync(join(tmpdir(), 'reading-api-test-'));
   const server = createReadingApi(testConfig(dataDir), db, {
     analyzer: async ({ itemId, title, text }) => analyzeItem(db, { itemId, title, text })
   });
+  t.after(() => { server.closeAllConnections(); if (server.listening) server.close(); db.close(); });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   const address = server.address();
@@ -429,7 +433,7 @@ test('validates brief events and applies resurfacing rules', async () => {
   }).then((res) => res.json() as Promise<any>);
 
   const afterResurfacedBrief = briefGuide(db, { briefDate: '2026-05-06', lookbackHours: 48, focus: ['agent-memory'] });
-  assert.ok(afterResurfacedBrief.candidates.some((item) => item.item_id === skippedIngest.data.item_id));
+  assert.ok(!afterResurfacedBrief.candidates.some((item) => item.item_id === skippedIngest.data.item_id));
 
   await new Promise<void>((resolve) => server.close(() => resolve()));
 });

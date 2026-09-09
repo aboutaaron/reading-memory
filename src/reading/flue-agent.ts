@@ -7,12 +7,16 @@ import {
 } from '@flue/runtime/internal';
 import type { Database } from '../db/connection.js';
 import { ApiError } from '../api/errors.js';
-import type { Analysis } from './types.js';
+import type { Analysis, Relationship } from './types.js';
 import { canonicalRelationship, findRelationships } from './analyzer.js';
 import { FlueTraceLogger } from './flue-trace.js';
 import { analyzeItemSkill, createReadingAgent } from './flue-reading-agent.js';
+import { buildReadingContext, type CallerReadingContext, type PriorReadingItem } from './reading-context.js';
 
 const VIRTUAL_ROOT = '/workspace';
+export const READING_ANALYSIS_VERSION = 'reading-api-flue-v2';
+
+export const MODEL_RELATION_TYPES = ['supports', 'contradicts', 'extends', 'duplicates_angle', 'related', 'updates'] as const;
 
 const FlueAnalysisSchema = v.object({
   summary: v.string(),
@@ -34,7 +38,11 @@ const FlueAnalysisSchema = v.object({
     to_item_id: v.string(),
     relation_type: v.string(),
     explanation: v.string(),
-    confidence: v.number()
+    confidence: v.number(),
+    evidence: v.optional(v.object({
+      source_quote: v.string(),
+      target_quote: v.string()
+    }))
   }))
 });
 
@@ -44,6 +52,7 @@ export type ReadingAnalyzerInput = {
   itemId: string;
   title: string | null;
   text: string;
+  readerContext?: CallerReadingContext;
   sessionId?: string;
   /** Cancels the in-flight analysis (e.g. request deadline). Passed through to `session.skill()`. */
   signal?: AbortSignal;
@@ -91,7 +100,7 @@ export function createFlueReadingAnalyzer(
   const modelResolver = options.resolveModel ?? defaultResolver;
   const agent = createReadingAgent(options.model);
 
-  return async ({ itemId, title, text, sessionId, signal }) => {
+  return async ({ itemId, title, text, readerContext, sessionId, signal }) => {
     const requestedSessionId = sessionId ?? `analysis:${itemId}`;
     const trace = traces.createTrace({
       itemId,
@@ -110,6 +119,7 @@ export function createFlueReadingAnalyzer(
     context.setEventCallback(trace.onEvent);
 
     try {
+      const readingContext = buildReadingContext(db, { itemId, title, text, ...(readerContext ? { readerContext } : {}) });
       const harness = await context.initializeRootHarness(agent);
       let result: FlueAnalysis;
       try {
@@ -118,7 +128,8 @@ export function createFlueReadingAnalyzer(
           args: {
             item_id: itemId,
             title,
-            text
+            text,
+            ...readingContext
           },
           result: FlueAnalysisSchema,
           ...(signal ? { signal } : {})
@@ -128,7 +139,7 @@ export function createFlueReadingAnalyzer(
         await harness.close();
         await context.flushEventCallbacks();
       }
-      const analysis = normalizeAnalysis(db, itemId, result, options.model);
+      const analysis = normalizeAnalysis(db, itemId, result, options.model, { text, priorItems: readingContext.prior_items });
       await trace.success(analysis);
       return analysis;
     } catch (error) {
@@ -180,7 +191,10 @@ class AnalysisSandbox implements SandboxApi {
   }
 }
 
-function normalizeAnalysis(db: Database, itemId: string, result: FlueAnalysis, model: string): Analysis {
+export function normalizeAnalysis(db: Database, itemId: string, result: FlueAnalysis, model: string, evidenceContext: {
+  text: string;
+  priorItems: PriorReadingItem[];
+}): Analysis {
   const themes = uniqueStrings(result.relevance.themes).slice(0, 12);
   const tags = result.tags
     .map((tag) => ({
@@ -191,13 +205,31 @@ function normalizeAnalysis(db: Database, itemId: string, result: FlueAnalysis, m
     .filter((tag) => tag.tag)
     .slice(0, 20);
 
-  const modelRelationships = result.relationships
-    .filter((relationship) => relationship.to_item_id && relationship.to_item_id !== itemId && itemExists(db, relationship.to_item_id))
-    .map((relationship) => canonicalRelationship(itemId, relationship.to_item_id, {
-      relation_type: relationship.relation_type.trim() || 'related',
+  const suppliedItems = new Map(evidenceContext.priorItems.map((item) => [item.item_id, item]));
+  const modelRelationships: Relationship[] = [];
+  const seenRelationships = new Set<string>();
+  for (const relationship of result.relationships) {
+    const target = suppliedItems.get(relationship.to_item_id);
+    const relationType = relationship.relation_type.trim();
+    const sourceQuote = relationship.evidence?.source_quote.trim() ?? '';
+    const targetQuote = relationship.evidence?.target_quote.trim() ?? '';
+    // Existence is insufficient: the model can only cite the exact passages it saw.
+    if (relationship.from_item_id !== itemId || relationship.to_item_id === itemId || !target
+      || !(MODEL_RELATION_TYPES as readonly string[]).includes(relationType)
+      || !sourceQuote || !targetQuote || sourceQuote.length > 1500 || targetQuote.length > 1500
+      || !evidenceContext.text.includes(sourceQuote)
+      || !target.source_passages.some((passage) => passage.includes(targetQuote))) continue;
+    const key = `${relationship.to_item_id}:${relationType}`;
+    if (seenRelationships.has(key)) continue;
+    seenRelationships.add(key);
+    modelRelationships.push(canonicalRelationship(itemId, target.item_id, {
+      relation_type: relationType,
       explanation: relationship.explanation.trim().slice(0, 500) || 'Flue reading relationship',
-      confidence: clamp01(relationship.confidence)
+      confidence: clamp01(relationship.confidence),
+      evidence: { source_quote: sourceQuote, target_quote: targetQuote },
+      origin: 'model'
     }));
+  }
 
   return {
     summary: result.summary.trim().slice(0, 1200) || 'No extractable summary.',
@@ -210,9 +242,9 @@ function normalizeAnalysis(db: Database, itemId: string, result: FlueAnalysis, m
     confidence: clamp01(result.confidence),
     reason: result.reason.trim().slice(0, 600) || 'Flue reading judgment completed.',
     tags,
-    relationships: [...modelRelationships, ...findRelationships(db, itemId, themes)].slice(0, 3),
+    relationships: (modelRelationships.length ? modelRelationships : findRelationships(db, itemId, themes)).slice(0, 3),
     model,
-    analysis_version: 'reading-api-flue-v1'
+    analysis_version: READING_ANALYSIS_VERSION
   };
 }
 
@@ -223,8 +255,4 @@ function clamp01(value: number) {
 
 function uniqueStrings(values: string[]) {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
-}
-
-function itemExists(db: Database, itemId: string) {
-  return Boolean(db.prepare("SELECT 1 AS ok FROM items WHERE id = ? AND status = 'indexed'").get(itemId));
 }

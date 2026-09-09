@@ -1,23 +1,27 @@
 import * as v from 'valibot';
 
 export const RequestIdSchema = v.pipe(v.string(), v.uuid());
-export const DateSchema = v.pipe(v.string(), v.regex(/^\d{4}-\d{2}-\d{2}$/));
+export const DateSchema = v.pipe(v.string(), v.regex(/^\d{4}-\d{2}-\d{2}$/), v.check((value) => {
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}, 'Expected a valid calendar date'));
+const TitleSchema = v.optional(v.pipe(v.string(), v.maxLength(300)));
 
 export const IngestRequestSchema = v.object({
   request_id: RequestIdSchema,
   source_type: v.picklist(['url', 'text', 'pdf_url']),
   source: v.variant('type', [
-    v.object({ type: v.literal('url'), url: v.pipe(v.string(), v.url()) }),
-    v.object({ type: v.literal('text'), text: v.string(), title: v.optional(v.string()) }),
-    v.object({ type: v.literal('pdf_url'), url: v.pipe(v.string(), v.url()) })
+    v.object({ type: v.literal('url'), url: v.pipe(v.string(), v.url()), title: TitleSchema }),
+    v.object({ type: v.literal('text'), text: v.string(), title: TitleSchema }),
+    v.object({ type: v.literal('pdf_url'), url: v.pipe(v.string(), v.url()), title: TitleSchema })
   ]),
-  source_context: v.optional(v.string()),
-  ingest_reason: v.optional(v.string())
+  source_context: v.optional(v.pipe(v.string(), v.maxLength(1000))),
+  ingest_reason: v.optional(v.pipe(v.string(), v.maxLength(4000)))
 });
 
 export const QueryRequestSchema = v.object({
   request_id: RequestIdSchema,
-  query: v.pipe(v.string(), v.minLength(1)),
+  query: v.pipe(v.string(), v.minLength(1), v.maxLength(4000)),
   filters: v.optional(v.object({
     since: v.optional(v.string()),
     tags: v.optional(v.array(v.string()))
@@ -46,6 +50,21 @@ export const BriefEventsRequestSchema = v.object({
   request_id: RequestIdSchema,
   events: v.pipe(v.array(BriefEventSchema), v.minLength(1), v.maxLength(50))
 });
+
+function noteField(max: number) {
+  return v.pipe(v.string(), v.minLength(1), v.maxLength(max), v.check((value) => value.trim().length > 0, 'Must contain non-whitespace text'));
+}
+
+export const AnnotationRequestSchema = v.object({
+  request_id: RequestIdSchema,
+  actor_type: v.picklist(['user', 'agent']),
+  actor: noteField(120),
+  note: noteField(4000),
+  project: v.optional(noteField(200)),
+  question: v.optional(noteField(1000)),
+  supersedes_annotation_id: v.optional(noteField(100))
+});
+export type AnnotationRequest = v.InferOutput<typeof AnnotationRequestSchema>;
 
 export type IngestRequest = v.InferOutput<typeof IngestRequestSchema>;
 export type QueryRequest = v.InferOutput<typeof QueryRequestSchema>;

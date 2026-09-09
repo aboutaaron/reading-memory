@@ -140,6 +140,41 @@ Supported source types: `url`, `text`, `pdf_url`. URL and PDF ingestion require 
 
 `POST /brief-events` is idempotent by `request_id` and guarded against equivalent duplicate events for the same item/date/kind/source context.
 
+### Reader annotations
+
+`POST /items/:id/annotations` uses bearer authentication and a separate allowance of 30 annotation writes per minute. These writes do not consume the 10-per-minute ingestion allowance, and ingestion does not consume annotation capacity. `/capabilities.rate_limits.annotation_per_minute` exposes this limit. Use a fresh UUID for each operation and reuse it only for the same retry:
+
+```json
+{
+  "request_id": "00000000-0000-4000-8000-000000000031",
+  "actor_type": "user",
+  "actor": "Aaron",
+  "note": "This assumes clean data contracts. I am not convinced it covers our exception cases.",
+  "project": "Analytics verification",
+  "question": "When should conflicting evidence require human review?"
+}
+```
+
+The response contains `annotation` and `dedupe_status`. Notes preserve original whitespace and words. `actor_type` is `user` or `agent`; do not attribute an agent inference to a user. Limits are actor 120, note 4,000, project 200, and question 1,000 characters. Optional fields must contain meaningful text when supplied.
+
+To correct a note, create a new annotation with `supersedes_annotation_id` pointing to its active predecessor on the same item. History remains available through `GET /items/:id` as `reader_annotations`, with an `active` flag. Only active notes, projects, and questions contribute to the search index. A second competing correction returns a conflict rather than silently overwriting history. An annotation write does not reanalyze the source; subsequent ingests can use it as prior reading context.
+
+`source_context` and `ingest_reason` on ingest are preserved as provenance and supplied in bounded form to analysis. An exact duplicate capture retains its existing analysis/provenance; use an explicit annotation to record a new reason or reaction to that existing item.
+
+### Title maintenance
+
+`npm run backfill:titles -- --db /path/to/reading.sqlite` previews titles inferred only from explicit stored Markdown/setext headings. It opens the database read-only and never refetches sources. After reviewing proposals and backing up an upgraded database, add `--apply` to persist inferred titles and rebuild the affected search entries. Plain first sentences remain untitled; they are not reliable title evidence. Provenance records that a backfilled title was inferred from stored text.
+
+### Retrieval and brief compatibility
+
+`GET /items/:id` omits `extracted_text` by default. Metadata, `truncated`, `analysis.reason`, annotation history, and relationship quotations remain available in the default response. Use `GET /items/:id?include=text` to opt into the retained source text (up to 100,000 characters); `truncated` still describes truncation at ingestion, not response pagination. The only supported include value is a single `include=text` parameter.
+
+Query results retain `answer: ''` and return `confidence: null` for nonempty results (`0` for empty results). These are compatibility fields, not generated answers or calibrated retrieval confidence. Read `retrieval_hint`, `search_terms`, `match_strategy`, `results[].matched_terms`, snippets, and citations. A partial-term fallback requires inspection before synthesis.
+
+Brief `brief_date` is a valid calendar date in UTC. The lookback ends at the next midnight, and future items/analyses are excluded. Events use their recorded business `brief_date`; this supports recording the outcome of an earlier brief. Due schedules are considered outside the normal lookback. The service selects up to eight eligible items before returning up to ten skip explanations. This does not send a brief or schedule delivery.
+
+Both `included` and `resurfaced` now count as consumption. Recording `resurfaced` without a new future `resurface_after` suppresses the item indefinitely from subsequent briefs until a later event schedules another appearance. To allow another appearance, supply a future `resurface_after` on the consumption event or record a later scheduling event. A later `skipped` event without a schedule does not undo consumption. This changes the previous behavior in which resurfaced items could repeat immediately.
+
 ## Deploy On A VPS
 
 ```bash
@@ -219,7 +254,7 @@ Expected healthy signals:
 - `/health` returns `ready: true`, `db: "ok"`, and disk warning is false before production use.
 - `ss` shows `127.0.0.1:4727`, not `0.0.0.0`.
 - `journalctl --user -u reading-memory.service` contains metadata events only, not request bodies or extracted text.
-- `npm run eval:reading` passes before model, ranking, dedupe, or brief-guide behavior changes are accepted.
+- `npm run eval:reading` passes before ranking, dedupe, or brief-guide changes are accepted. Its analyses are canned; model changes additionally require reviewed live-model evaluation.
 
 Rollback:
 

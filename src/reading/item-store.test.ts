@@ -2,6 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openMemoryDatabase } from '../db/connection.js';
 import { ItemStore } from './item-store.js';
+import { ApiError } from '../api/errors.js';
+import { ReaderAnnotationStore } from './reader-annotations.js';
+import { BriefEventStore, briefEventsPayloadHash } from './brief-events.js';
 import type { Analysis, ExtractedSource } from './types.js';
 
 const source: ExtractedSource = {
@@ -60,8 +63,9 @@ test('idempotency replay normalizes older response snapshots', async () => {
   db.prepare(`
     INSERT INTO items (
       id, source_type, title, ingested_at, content_hash, status, extracted_text, truncated, provenance_json
-    ) VALUES ('item_old', 'text', 'Old item', ?, ?, 'indexed', '', 0, '{}')
+    ) VALUES ('item_old', 'text', 'Old item', ?, ?, 'indexed', '', 1, '{}')
   `).run(now, source.contentHash);
+  db.prepare("UPDATE items SET author = 'Legacy author', publisher = 'Legacy publisher', published_at = '2026-09-01' WHERE id = 'item_old'").run();
   db.prepare(`
     INSERT INTO idempotency_keys (principal, request_id, payload_hash, item_id, response_snapshot, created_at, expires_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -101,6 +105,11 @@ test('idempotency replay normalizes older response snapshots', async () => {
 
   assert.equal(response.dedupe_status, 'idempotent_replay');
   assert.deepEqual(response.related_items, []);
+  assert.equal(response.truncated, true);
+  assert.equal(response.author, 'Legacy author');
+  assert.equal(response.publisher, 'Legacy publisher');
+  assert.equal(response.published_at, '2026-09-01');
+  assert.equal(response.reason, 'old snapshot');
 });
 
 test('conflicting idempotency replay fails', async () => {
@@ -354,14 +363,17 @@ test('stale in-progress analysis can be retried for the same content hash', asyn
   const store = new ItemStore(db);
   let resolveAnalysis!: (value: Analysis) => void;
   const pending = new Promise<Analysis>((resolve) => { resolveAnalysis = resolve; });
+  let notifyStarted!: () => void;
+  const started = new Promise<void>((resolve) => { notifyStarted = resolve; });
 
   const first = store.ingest({
     principal: 'token:test',
     requestId: 'req-1',
     payloadHash: 'sha256:req1',
     source,
-    analyze: async () => pending
+    analyze: async () => { notifyStarted(); return pending; }
   });
+  await started;
   const row = db.prepare('SELECT id FROM items WHERE content_hash = ?').get(source.contentHash) as { id: string };
   db.prepare('UPDATE items SET ingested_at = ? WHERE id = ?').run(new Date(Date.now() - 120_000).toISOString(), row.id);
 
@@ -384,15 +396,18 @@ test('stale failed analysis cannot overwrite a successful retry', async () => {
   const store = new ItemStore(db);
   let rejectAnalysis!: (error: Error) => void;
   const pending = new Promise<Analysis>((_, reject) => { rejectAnalysis = reject; });
+  let notifyStarted!: () => void;
+  const started = new Promise<void>((resolve) => { notifyStarted = resolve; });
 
   const first = store.ingest({
     principal: 'token:test',
     requestId: 'req-1',
     payloadHash: 'sha256:req1',
     source,
-    analyze: async () => pending
+    analyze: async () => { notifyStarted(); return pending; }
   });
   first.catch(() => undefined);
+  await started;
 
   const row = db.prepare('SELECT id FROM items WHERE content_hash = ?').get(source.contentHash) as { id: string };
   db.prepare('UPDATE items SET ingested_at = ? WHERE id = ?').run(new Date(Date.now() - 120_000).toISOString(), row.id);
@@ -421,15 +436,20 @@ test('stale successful analysis does not read a missing retry analysis', async (
   let resolveRetry!: (value: Analysis) => void;
   const firstPending = new Promise<Analysis>((resolve) => { resolveFirst = resolve; });
   const retryPending = new Promise<Analysis>((resolve) => { resolveRetry = resolve; });
+  let notifyStarted!: () => void;
+  const started = new Promise<void>((resolve) => { notifyStarted = resolve; });
+  let notifyRetryStarted!: () => void;
+  const retryStarted = new Promise<void>((resolve) => { notifyRetryStarted = resolve; });
 
   const first = store.ingest({
     principal: 'token:test',
     requestId: 'req-1',
     payloadHash: 'sha256:req1',
     source,
-    analyze: async () => firstPending
+    analyze: async () => { notifyStarted(); return firstPending; }
   });
   first.catch(() => undefined);
+  await started;
 
   const row = db.prepare('SELECT id FROM items WHERE content_hash = ?').get(source.contentHash) as { id: string };
   db.prepare('UPDATE items SET ingested_at = ? WHERE id = ?').run(new Date(Date.now() - 120_000).toISOString(), row.id);
@@ -439,9 +459,9 @@ test('stale successful analysis does not read a missing retry analysis', async (
     requestId: 'req-2',
     payloadHash: 'sha256:req2',
     source,
-    analyze: async () => retryPending
+    analyze: async () => { notifyRetryStarted(); return retryPending; }
   });
-
+  await retryStarted;
   resolveFirst(analysis);
   const firstOutcome = await Promise.allSettled([first]).then(([outcome]) => outcome);
   resolveRetry(analysis);
@@ -563,4 +583,84 @@ test('text captures with same inferred canonical source do not become unrelated 
   assert.notEqual(first.item_id, second.item_id);
   assert.equal(second.dedupe_status, 'content_changed');
   assert.equal(row.supersedes_item_id, first.item_id);
+});
+
+test('async ingestion reserves shared request IDs against annotation and brief-event writes', async (t) => {
+  const db = openMemoryDatabase();
+  t.after(() => db.close());
+  const store = new ItemStore(db);
+  const existing = await store.ingest({
+    principal: 'token:test', requestId: 'seed-request', payloadHash: 'sha256:seed-request',
+    source: { ...source, contentHash: 'sha256:seed-item' }, analyze: async () => analysis
+  });
+  let finishAnalysis!: (value: Analysis) => void;
+  let notifyStarted!: () => void;
+  const started = new Promise<void>((resolve) => { notifyStarted = resolve; });
+  const pendingAnalysis = new Promise<Analysis>((resolve) => { finishAnalysis = resolve; });
+  const pending = store.ingest({
+    principal: 'token:test', requestId: 'shared-request', payloadHash: 'sha256:shared-request', source,
+    analyze: async () => { notifyStarted(); return pendingAnalysis; }
+  });
+  await started;
+  const annotations = new ReaderAnnotationStore(db);
+  const briefEvents = new BriefEventStore(db);
+  const annotationInput = {
+    principal: 'token:test', requestId: 'shared-request', itemId: existing.item_id,
+    body: { request_id: 'shared-request', actor_type: 'user' as const, actor: 'Reader', note: 'Reader judgment.' }
+  };
+  const briefBody = {
+    request_id: 'shared-request',
+    events: [{ item_id: existing.item_id, brief_date: '2026-09-09', event_kind: 'included' as const, included_bool: true, rationale: 'Relevant to this brief.' }]
+  };
+  const conflict = (error: unknown) => error instanceof ApiError && error.status === 409 && error.code === 'IDEMPOTENCY_CONFLICT';
+  assert.throws(() => annotations.record(annotationInput), conflict);
+  assert.throws(() => briefEvents.record({ principal: 'token:test', requestId: 'shared-request', payloadHash: briefEventsPayloadHash(briefBody), body: briefBody }), conflict);
+
+  assert.equal(annotations.record({ ...annotationInput, requestId: 'unrelated-annotation', body: { ...annotationInput.body, request_id: 'unrelated-annotation' } }).dedupe_status, 'created');
+  assert.equal(briefEvents.record({ principal: 'token:test', requestId: 'unrelated-brief', payloadHash: briefEventsPayloadHash(briefBody), body: { ...briefBody, request_id: 'unrelated-brief' } }).dedupe_status, 'created');
+  finishAnalysis(analysis);
+  const result = await pending;
+  assert.equal(result.status, 'indexed');
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM analyses WHERE item_id = ?').get(result.item_id)?.n, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM items WHERE status = 'failed'").get()?.n, 0);
+});
+
+test('ItemStore instances sharing a database coalesce extraction and analysis for the same request', async (t) => {
+  const db = openMemoryDatabase();
+  t.after(() => db.close());
+  let finishExtraction!: (value: ExtractedSource) => void;
+  let extracts = 0;
+  let analyses = 0;
+  const extraction = new Promise<ExtractedSource>((resolve) => { finishExtraction = resolve; });
+  const input = {
+    principal: 'token:test', requestId: 'shared-instance-request', payloadHash: 'sha256:shared-instance-request',
+    extract: async () => { extracts += 1; return extraction; },
+    analyze: async () => { analyses += 1; return analysis; }
+  };
+  const first = new ItemStore(db).ingest(input);
+  const second = new ItemStore(db).ingest(input);
+  await assert.rejects(() => new ItemStore(db).ingest({ ...input, payloadHash: 'sha256:changed-request' }), (error: unknown) => error instanceof ApiError && error.status === 409);
+  finishExtraction(source);
+  const [created, replay] = await Promise.all([first, second]);
+  assert.equal(extracts, 1);
+  assert.equal(analyses, 1);
+  assert.equal(created.item_id, replay.item_id);
+  assert.equal(replay.dedupe_status, 'idempotent_replay');
+});
+
+test('replay enrichment preserves metadata fields already present in the original snapshot', async (t) => {
+  const db = openMemoryDatabase();
+  t.after(() => db.close());
+  const store = new ItemStore(db);
+  const input = {
+    principal: 'token:test', requestId: 'metadata-snapshot', payloadHash: 'sha256:metadata-snapshot', source,
+    analyze: async () => analysis
+  };
+  const original = await store.ingest(input);
+  db.prepare("UPDATE items SET author = 'Later author', publisher = 'Later publisher', published_at = '2026-09-01', truncated = 1 WHERE id = ?").run(original.item_id);
+  const replay = await store.ingest(input);
+  assert.equal(replay.truncated, false);
+  assert.equal(replay.author, null);
+  assert.equal(replay.publisher, null);
+  assert.equal(replay.published_at, null);
 });

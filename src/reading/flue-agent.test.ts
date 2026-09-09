@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os';
 import { fauxAssistantMessage, fauxToolCall, registerFauxProvider } from '@earendil-works/pi-ai/compat';
 import { resolveModel } from '@flue/runtime/internal';
 import { openMemoryDatabase } from '../db/connection.js';
-import { createFlueReadingAnalyzer, flueAnalyzerHealth, wrapResolveModelWithBaseUrlOverrides } from './flue-agent.js';
+import { createFlueReadingAnalyzer, flueAnalyzerHealth, normalizeAnalysis, wrapResolveModelWithBaseUrlOverrides } from './flue-agent.js';
+import type { PriorReadingItem } from './reading-context.js';
 
 test('flueAnalyzerHealth reports the packaged analyze-item skill as ready', () => {
   assert.deepEqual(flueAnalyzerHealth(), { status: 'ok', warn: false });
@@ -121,7 +122,7 @@ test('Flue analyzer loads the packaged analyze-item skill without persisting opa
       text: 'Local agents need durable reading memory and reliable citations.'
     });
 
-    assert.equal(result.analysis_version, 'reading-api-flue-v1');
+    assert.equal(result.analysis_version, 'reading-api-flue-v2');
     assert.equal(result.model, 'faux/faux-1');
     assert.equal(result.recommended_action, 'brief');
     assert.deepEqual(result.relevance.themes, ['agent-memory']);
@@ -216,7 +217,7 @@ test('Flue trace write failures do not fail analysis', async () => {
     });
 
     assert.equal(result.recommended_action, 'save');
-    assert.equal(result.analysis_version, 'reading-api-flue-v1');
+    assert.equal(result.analysis_version, 'reading-api-flue-v2');
   } finally {
     faux.unregister();
     await rm(tmp, { recursive: true, force: true });
@@ -331,6 +332,114 @@ test('Flue analyzer propagates an abort after the provider request starts', asyn
 
     await assert.rejects(analysis, /Flue reading analysis failed/);
     assert.equal(faux.state.callCount, 1);
+  } finally {
+    faux.unregister();
+  }
+});
+
+const evidenceResult: Parameters<typeof normalizeAnalysis>[2] = {
+  summary: 'Version checks make cache reuse safer.',
+  claims: ['Cache reuse requires version checks.'],
+  relevance: { score: 0.85, themes: ['cache'] },
+  recommended_action: 'brief',
+  confidence: 0.9,
+  reason: 'Addresses the reader\'s cache invalidation question.',
+  tags: [{ tag: 'cache', reason: 'Core topic', confidence: 0.9 }],
+  relationships: [{
+    from_item_id: 'current', to_item_id: 'prior', relation_type: 'supports',
+    explanation: 'Both sources require a version check.', confidence: 0.88,
+    evidence: { source_quote: 'Check the cache version before reuse.', target_quote: 'Cache reuse requires checking the version.' }
+  }]
+};
+
+const evidencePrior: PriorReadingItem = {
+  item_id: 'prior', title: 'Cache reuse', summary: 'A model summary is not source evidence.', tags: ['cache'],
+  source_passages: ['Cache reuse requires checking the version.'], annotations: []
+};
+
+test('model relationships retain exact evidence, deduplicate, and do not mix in theme fallback', () => {
+  const db = openMemoryDatabase();
+  db.prepare(`INSERT INTO items (id, source_type, ingested_at, content_hash, status, extracted_text)
+    VALUES ('other', 'text', '2026-09-01', 'other', 'indexed', 'cache')`).run();
+  db.prepare("INSERT INTO tags (item_id, tag, reason, confidence) VALUES ('other', 'cache', 'test', 0.9)").run();
+  const result = normalizeAnalysis(db, 'current', {
+    ...evidenceResult, relationships: [...evidenceResult.relationships, ...evidenceResult.relationships]
+  }, 'test', { text: 'Check the cache version before reuse.', priorItems: [evidencePrior] });
+  assert.equal(result.relationships.length, 1);
+  assert.equal(result.relationships[0]!.origin, 'model');
+  assert.deepEqual(result.relationships[0]!.evidence, evidenceResult.relationships[0]!.evidence);
+});
+
+test('model relationships reject unsupplied IDs, invalid types, wrong directions, and unsupported quotes', () => {
+  const db = openMemoryDatabase();
+  db.prepare(`INSERT INTO items (id, source_type, ingested_at, content_hash, status, extracted_text)
+    VALUES ('not_supplied', 'text', '2026-09-01', 'not_supplied', 'indexed', 'Cache reuse requires checking the version.')`).run();
+  const base = evidenceResult.relationships[0]!;
+  const invalid = [
+    { ...base, to_item_id: 'not_supplied' },
+    { ...base, from_item_id: 'other' },
+    { ...base, to_item_id: 'current' },
+    { ...base, relation_type: 'mysteriously_related' },
+    { ...base, relation_type: 'same_theme' },
+    { ...base, evidence: { source_quote: 'Fabricated quote.', target_quote: base.evidence!.target_quote } },
+    { ...base, evidence: { source_quote: base.evidence!.source_quote, target_quote: evidencePrior.summary } },
+    { ...base, evidence: { source_quote: base.evidence!.source_quote, target_quote: 'Text omitted from the supplied excerpts.' } },
+    { ...base, evidence: { source_quote: ' ', target_quote: base.evidence!.target_quote } },
+    { ...base, evidence: undefined }
+  ];
+  for (const relationship of invalid) {
+    const result = normalizeAnalysis(db, 'current', { ...evidenceResult, relationships: [relationship] }, 'test', {
+      text: 'Check the cache version before reuse.', priorItems: [evidencePrior]
+    });
+    assert.deepEqual(result.relationships, [], JSON.stringify(relationship));
+  }
+});
+
+test('invalid model relationships fall back to clearly labeled theme matches at 0.5 confidence', () => {
+  const db = openMemoryDatabase();
+  for (const [id, status] of [['prior', 'indexed'], ['failed', 'failed']]) {
+    db.prepare(`INSERT INTO items (id, source_type, ingested_at, content_hash, status, extracted_text)
+      VALUES (?, 'text', '2026-09-01', ?, ?, 'cache')`).run(id!, id!, status!);
+    db.prepare("INSERT INTO tags (item_id, tag, reason, confidence) VALUES (?, 'cache', 'test', 0.9)").run(id!);
+  }
+  const result = normalizeAnalysis(db, 'current', {
+    ...evidenceResult, relationships: [{ ...evidenceResult.relationships[0]!, to_item_id: 'invented' }]
+  }, 'test', { text: 'Check the cache version before reuse.', priorItems: [evidencePrior] });
+  assert.equal(result.relationships.length, 1);
+  assert.equal(result.relationships[0]!.relation_type, 'same_theme');
+  assert.equal(result.relationships[0]!.origin, 'heuristic');
+  assert.equal(result.relationships[0]!.confidence, 0.5);
+  assert.equal(result.relationships[0]!.evidence, undefined);
+});
+
+test('Flue receives prior source passages and attributed reader context before model judgment', async () => {
+  const db = openMemoryDatabase();
+  db.prepare(`INSERT INTO items (id, source_type, title, ingested_at, content_hash, status, extracted_text)
+    VALUES ('prior', 'text', 'Cache reuse', '2026-09-01', 'prior', 'indexed', ?)`).run(evidencePrior.source_passages[0]!);
+  db.prepare('INSERT INTO item_fts (item_id, title, body, summary, tags) VALUES (?, ?, ?, ?, ?)')
+    .run('prior', 'Cache reuse', evidencePrior.source_passages[0]!, evidencePrior.summary, 'cache');
+  db.prepare(`INSERT INTO reader_annotations (id, item_id, actor_type, actor, note, project, question, created_at)
+    VALUES ('note', 'prior', 'user', 'Aaron', 'I am uncertain about staleness guarantees.', 'Analytics harness', 'When is reuse safe?', '2026-09-01')`).run();
+  const faux = registerFauxProvider();
+  let providerInput = '';
+  faux.setResponses([async (context) => {
+    providerInput = JSON.stringify(context);
+    return fauxAssistantMessage(fauxToolCall('finish', evidenceResult), { stopReason: 'toolUse' });
+  }]);
+  try {
+    const analyze = createFlueReadingAnalyzer(db, { model: 'faux/faux-1', resolveModel: () => faux.getModel() });
+    const result = await analyze({
+      itemId: 'current', title: 'Cache versions', text: 'Check the cache version before reuse.',
+      readerContext: { source_context: 'user_shared_link', ingest_reason: 'Investigating cache invalidation.' }
+    });
+    assert.match(providerInput, /Investigating cache invalidation/);
+    assert.match(providerInput, /Cache reuse requires checking the version/);
+    assert.match(providerInput, /I am uncertain about staleness guarantees/);
+    assert.match(providerInput, /actor_type/);
+    assert.match(providerInput, /Analytics harness/);
+    assert.equal(result.relationships.length, 1);
+    assert.equal(result.relationships[0]!.origin, 'model');
+    assert.equal(result.relationships[0]!.to_item_id, 'prior');
   } finally {
     faux.unregister();
   }

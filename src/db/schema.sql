@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS analyses (
   id TEXT PRIMARY KEY,
   item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
   summary TEXT NOT NULL,
+  reason TEXT,
   claims_json TEXT NOT NULL DEFAULT '[]',
   relevance_json TEXT NOT NULL DEFAULT '{}',
   recommended_action TEXT NOT NULL,
@@ -48,6 +49,8 @@ CREATE TABLE IF NOT EXISTS relationships (
   explanation TEXT NOT NULL,
   confidence REAL NOT NULL,
   created_at TEXT NOT NULL,
+  origin TEXT NOT NULL DEFAULT 'heuristic' CHECK (origin IN ('model', 'heuristic')),
+  evidence_json TEXT,
   CHECK (from_item_id <> to_item_id),
   UNIQUE (from_item_id, to_item_id, relation_type)
 );
@@ -94,12 +97,26 @@ CREATE TABLE IF NOT EXISTS brief_events (
   UNIQUE (item_id, brief_date, event_kind, source_context)
 );
 
+CREATE TABLE IF NOT EXISTS reader_annotations (
+  id TEXT PRIMARY KEY,
+  item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  actor_type TEXT NOT NULL CHECK (actor_type IN ('user', 'agent')),
+  actor TEXT NOT NULL,
+  note TEXT NOT NULL,
+  project TEXT,
+  question TEXT,
+  supersedes_annotation_id TEXT UNIQUE REFERENCES reader_annotations(id),
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_reader_annotations_item ON reader_annotations(item_id, created_at);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS item_fts USING fts5(
   item_id UNINDEXED,
   title,
   body,
   summary,
-  tags
+  tags,
+  reader_notes
 );
 
 CREATE INDEX IF NOT EXISTS idx_items_ingested_at ON items(ingested_at);

@@ -88,6 +88,7 @@ export function createReadingApi(
         limiter.check(principal, 'query');
         const body = v.parse(QueryRequestSchema, await readRequestBody());
         const queryInput: Parameters<typeof queryCorpus>[1] = { query: body.query };
+        if (body.mode !== undefined) queryInput.mode = body.mode;
         if (body.top_k !== undefined) queryInput.topK = body.top_k;
         if (body.filters?.since !== undefined) queryInput.since = body.filters.since;
         if (body.filters?.tags !== undefined) queryInput.tags = body.filters.tags;
@@ -247,8 +248,9 @@ function setSecurityHeaders(res: ServerResponse) {
 function capabilities() {
   return {
     supported_ingest_types: ['url', 'text', 'pdf_url'],
-    query_modes: ['fts'],
+    query_modes: ['fts', 'fts+usage'],
     supports_brief_events: true,
+    brief_event_kinds: ['included', 'skipped', 'resurfaced', 'cited'],
     supports_reader_annotations: true,
     supports_forget: true,
     supports_reanalyze: true,

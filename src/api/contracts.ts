@@ -42,6 +42,7 @@ export const IngestRequestSchema = v.variant('source_type', [
 
 export const QueryRequestSchema = v.object({
   request_id: RequestIdSchema,
+  mode: v.optional(v.picklist(['fts', 'fts+usage'])),
   query: v.pipe(v.string(), v.minLength(1), v.maxLength(4000)),
   filters: v.optional(v.object({
     since: v.optional(v.string()),
@@ -60,7 +61,7 @@ export const BriefGuideRequestSchema = v.object({
 export const BriefEventSchema = v.object({
   item_id: v.pipe(v.string(), v.minLength(1)),
   brief_date: DateSchema,
-  event_kind: v.picklist(['included', 'skipped', 'resurfaced']),
+  event_kind: v.picklist(['included', 'skipped', 'resurfaced', 'cited']),
   included_bool: v.boolean(),
   rationale: v.pipe(v.string(), v.minLength(1)),
   source_context: v.optional(v.string()),

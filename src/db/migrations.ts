@@ -1,6 +1,6 @@
 import type { Database } from './connection.js';
 
-export const CURRENT_USER_VERSION = 5;
+export const CURRENT_USER_VERSION = 6;
 
 export function migrateSchema(db: Database, fromVersion: number) {
   let version = fromVersion;
@@ -22,6 +22,10 @@ export function migrateSchema(db: Database, fromVersion: number) {
   if (version < 5) {
     migrateToV5(db);
     version = 5;
+  }
+  if (version < 6) {
+    migrateToV6(db);
+    version = 6;
   }
   return version;
 }
@@ -91,4 +95,28 @@ function migrateToV5(db: Database) {
     expires_at TEXT NOT NULL,
     UNIQUE (principal, request_id)
   )`);
+}
+
+function migrateToV6(db: Database) {
+  // brief_events has no inbound foreign keys. Rebuild its CHECK constraint in
+  // the migration transaction, retaining IDs, history, uniqueness, and indexes.
+  db.exec(`
+    CREATE TABLE brief_events_next (
+      id TEXT PRIMARY KEY,
+      item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+      brief_date TEXT NOT NULL,
+      event_kind TEXT NOT NULL CHECK (event_kind IN ('included', 'skipped', 'resurfaced', 'cited')),
+      included_bool INTEGER NOT NULL CHECK (included_bool IN (0, 1)),
+      rationale TEXT NOT NULL,
+      source_context TEXT NOT NULL DEFAULT '',
+      resurface_after TEXT,
+      created_at TEXT NOT NULL,
+      UNIQUE (item_id, brief_date, event_kind, source_context)
+    );
+    INSERT INTO brief_events_next SELECT * FROM brief_events;
+    DROP TABLE brief_events;
+    ALTER TABLE brief_events_next RENAME TO brief_events;
+    CREATE INDEX idx_brief_events_item_date ON brief_events(item_id, brief_date);
+    CREATE INDEX idx_brief_events_resurface_after ON brief_events(resurface_after);
+  `);
 }

@@ -212,3 +212,29 @@ test('exhausted ingest quota does not block reader annotations', async (t) => {
   });
   assert.equal(annotation.status, 200);
 });
+
+
+test('HTTP supports explicit usage mode and cited events while rejecting incompatible citation fields', async (t) => {
+  const { post, get } = await fixture(t);
+  const ingest = await post('/ingest', textRequest());
+  const itemId = ingest.payload.data.item_id;
+  const today = new Date().toISOString().slice(0, 10);
+  const cited = { request_id: randomUUID(), events: [{ item_id: itemId, brief_date: today, event_kind: 'cited',
+    included_bool: true, rationale: 'Used to explain dependency invalidation.', source_context: 'answer:quality-test' }] };
+  assert.equal((await post('/brief-events', cited, 'wrong')).status, 401);
+  const created = await post('/brief-events', cited);
+  assert.equal(created.status, 200); assert.equal(created.payload.data.events[0].event_kind, 'cited');
+  assert.equal((await post('/brief-events', cited)).payload.data.dedupe_status, 'idempotent_replay');
+  const item = (await get(`/items/${itemId}`)).data;
+  assert.equal(item.usage_count, 1);
+  assert.equal(item.last_used_at, created.payload.data.events[0].created_at);
+  const query = await post('/query', { request_id: randomUUID(), query: 'cache invalidation', mode: 'fts+usage' });
+  assert.equal(query.status, 200); assert.equal(query.payload.data.retrieval_mode, 'fts+usage');
+  assert.equal(query.payload.data.results[0].usage.usage_count, 1);
+  const caps = (await get('/capabilities')).data;
+  assert.ok(caps.query_modes.includes('fts+usage')); assert.ok(caps.brief_event_kinds.includes('cited'));
+  assert.equal((await post('/query', { request_id: randomUUID(), query: 'cache', mode: 'unknown' })).status, 400);
+  for (const patch of [{ included_bool: false }, { resurface_after: today }, { event_kind: 'retrieved' }]) {
+    assert.equal((await post('/brief-events', { request_id: randomUUID(), events: [{ ...cited.events[0], ...patch }] })).status, 400);
+  }
+});

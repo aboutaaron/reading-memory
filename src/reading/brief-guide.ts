@@ -17,15 +17,28 @@ export function briefGuide(db: Database, input: { briefDate: string; lookbackHou
         PARTITION BY be.item_id ORDER BY be.brief_date DESC, be.created_at DESC, be.rowid DESC
       ) AS event_order
       FROM brief_events be, params p
-      WHERE be.brief_date <= p.brief_date
+      WHERE be.brief_date <= p.brief_date AND be.event_kind <> 'cited'
     ), event_positions AS (
       SELECT item_id,
         MIN(CASE WHEN event_kind IN ('included', 'resurfaced') THEN event_order END) AS consumed_order,
         MIN(CASE WHEN resurface_after IS NOT NULL THEN event_order END) AS scheduled_order
       FROM event_history GROUP BY item_id
+    ), brief_outcomes AS (
+      -- Multiple contexts in one brief date are one decision; any actual brief
+      -- use on that date interrupts a run of skipped briefs.
+      SELECT item_id, brief_date,
+        MAX(CASE WHEN event_kind IN ('included', 'resurfaced') THEN 1 ELSE 0 END) AS used
+      FROM event_history GROUP BY item_id, brief_date
+    ), dated_outcomes AS (
+      SELECT *, ROW_NUMBER() OVER (PARTITION BY item_id ORDER BY brief_date DESC) AS day_order
+      FROM brief_outcomes
+    ), skip_streaks AS (
+      SELECT item_id, COALESCE(MIN(CASE WHEN used = 1 THEN day_order END) - 1, COUNT(*)) AS consecutive_skips
+      FROM dated_outcomes GROUP BY item_id
     ), item_state AS (
       SELECT i.id AS item_id, i.title, i.source_uri, i.canonical_url, i.final_url, i.ingested_at,
         a.relevance_json, a.recommended_action, a.confidence, a.reason,
+        COALESCE(streak.consecutive_skips, 0) AS consecutive_skips,
         COALESCE(json_extract(a.relevance_json, '$.score'), 0) AS relevance_score,
         latest.event_kind AS latest_event_kind, latest.rationale AS latest_event_rationale,
         consumed.event_kind AS consumed_kind, consumed.brief_date AS consumed_date,
@@ -47,6 +60,7 @@ export function briefGuide(db: Database, input: { briefDate: string; lookbackHou
         ORDER BY created_at DESC, rowid DESC LIMIT 1
       )
       LEFT JOIN event_positions ep ON ep.item_id = i.id
+      LEFT JOIN skip_streaks streak ON streak.item_id = i.id
       LEFT JOIN event_history latest ON latest.item_id = i.id AND latest.event_order = 1
       LEFT JOIN event_history consumed ON consumed.item_id = i.id AND consumed.event_order = ep.consumed_order
       LEFT JOIN event_history scheduled ON scheduled.item_id = i.id AND scheduled.event_order = ep.scheduled_order
@@ -66,14 +80,18 @@ export function briefGuide(db: Database, input: { briefDate: string; lookbackHou
         END AS skip_reason
       FROM item_state s CROSS JOIN params p
       WHERE ingested_at >= p.since OR resurface_after IS NOT NULL
+    ), weighted AS (
+      SELECT *, CASE WHEN consecutive_skips >= 3 AND is_due = 0 THEN 1 ELSE 0 END AS feedback_demoted,
+        confidence * CASE WHEN consecutive_skips >= 3 AND is_due = 0 THEN 0.5 ELSE 1 END AS effective_confidence
+      FROM considered
     ), ranked AS (
       SELECT *, ROW_NUMBER() OVER (
         PARTITION BY skip_reason IS NULL
-        ORDER BY is_due DESC,
+        ORDER BY is_due DESC, feedback_demoted ASC,
           CASE recommended_action WHEN 'brief' THEN 0 WHEN 'save' THEN 1 ELSE 2 END,
-          relevance_score DESC, confidence DESC, ingested_at DESC, item_id ASC
+          relevance_score DESC, effective_confidence DESC, ingested_at DESC, item_id ASC
       ) AS selection_rank
-      FROM considered
+      FROM weighted
     ), output AS (
       SELECT *, CASE WHEN skip_reason IS NULL AND selection_rank <= ? THEN 1 ELSE 0 END AS selected
       FROM ranked
@@ -102,6 +120,8 @@ export function briefGuide(db: Database, input: { briefDate: string; lookbackHou
       relevance_score: row.relevance_score,
       recommended_action: row.recommended_action,
       confidence: row.confidence,
+      effective_confidence: row.effective_confidence,
+      consecutive_skips: row.consecutive_skips,
       resurfacing_note: row.is_due
         ? `resurfacing after ${row.resurface_after}`
         : row.latest_event_rationale
@@ -114,7 +134,9 @@ export function briefGuide(db: Database, input: { briefDate: string; lookbackHou
     theme_clusters: clusterThemes(candidates.flatMap((candidate) => candidate.themes)),
     skip_items: rows.filter((row) => row.selected === 0).map((row) => ({
       item_id: row.item_id,
-      reason: row.skip_reason ?? 'lower priority after scheduled items, brief recommendation, and relevance'
+      reason: row.skip_reason ?? (row.feedback_demoted
+        ? `lower priority after ${row.consecutive_skips} consecutive skipped briefs`
+        : 'lower priority after scheduled items, brief recommendation, and relevance')
     }))
   };
 }
@@ -129,6 +151,9 @@ type BriefRow = {
   relevance_score: number;
   recommended_action: string;
   confidence: number;
+  effective_confidence: number;
+  consecutive_skips: number;
+  feedback_demoted: number;
   reason: string | null;
   matching_tag: string | null;
   latest_event_rationale: string | null;
@@ -154,8 +179,9 @@ function whyNow(row: BriefRow, focused: boolean) {
       ? 'Recent reading recommended for a brief.'
       : 'Recent saved reading eligible for a brief.';
   const focus = focused && row.matching_tag ? ` Matches focus: ${row.matching_tag}.` : '';
+  const feedback = row.feedback_demoted ? ` Lower priority after ${row.consecutive_skips} consecutive skipped briefs; effective confidence halved.` : '';
   const rationale = row.is_due ? row.resurface_rationale : row.reason;
-  return `${selection}${focus} ${rationale?.trim() || 'The original analysis rationale was not recorded.'}`.slice(0, 600);
+  return `${selection}${focus}${feedback} ${rationale?.trim() || 'The original analysis rationale was not recorded.'}`.slice(0, 600);
 }
 
 function clusterThemes(themes: string[]) {

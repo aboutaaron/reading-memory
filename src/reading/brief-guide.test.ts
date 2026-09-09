@@ -40,7 +40,7 @@ function addItem(db: Database, id: string, input: AnalysisOptions & { ingestedAt
 
 function addEvent(db: Database, itemId: string, id: string, input: {
   date: string;
-  kind: 'included' | 'skipped' | 'resurfaced';
+  kind: 'included' | 'skipped' | 'resurfaced' | 'cited';
   resurfaceAfter?: string;
   createdAt?: string;
 }) {
@@ -213,4 +213,57 @@ test('invalid calendar dates are rejected instead of silently rolling into anoth
   const db = openMemoryDatabase();
   t.after(() => db.close());
   assert.throws(() => briefGuide(db, { briefDate: '2026-02-30' }), /Invalid brief_date/);
+});
+
+
+test('three distinct skipped briefs demote candidates and halve effective confidence without rewriting analysis', (t) => {
+  const db = openMemoryDatabase(); t.after(() => db.close());
+  addItem(db, 'repeated', { score: 0.99, confidence: 0.9 });
+  addItem(db, 'fresh', { score: 0.5, confidence: 0.5 });
+  addItem(db, 'one-day', { score: 0.7, confidence: 0.6 });
+  for (const date of ['2026-09-06', '2026-09-07', '2026-09-08']) {
+    addEvent(db, 'repeated', `skip-${date}`, { date, kind: 'skipped' });
+    addEvent(db, 'one-day', `same-day-${date}`, { date: '2026-09-08', kind: 'skipped' });
+  }
+  addEvent(db, 'repeated', 'citation-between', { date: '2026-09-07', kind: 'cited' });
+  const result = guide(db);
+  assert.deepEqual(result.candidates.map((r) => r.item_id), ['one-day', 'fresh', 'repeated']);
+  const demoted = result.candidates[2]!;
+  assert.equal(demoted.consecutive_skips, 3);
+  assert.equal(demoted.confidence, 0.9); assert.equal(demoted.effective_confidence, 0.45);
+  assert.match(demoted.why_now, /Lower priority after 3 consecutive skipped briefs/);
+  assert.equal(result.candidates[0]!.consecutive_skips, 1);
+  assert.equal(result.candidates[0]!.effective_confidence, 0.6);
+});
+
+test('explicit due schedules override repeated skip demotion and citations preserve deferred and consumed states', (t) => {
+  const db = openMemoryDatabase(); t.after(() => db.close());
+  for (const id of ['due', 'deferred', 'consumed', 'cited-only']) addItem(db, id, { confidence: 0.8 });
+  for (const date of ['2026-09-06', '2026-09-07', '2026-09-08']) {
+    addEvent(db, 'due', `due-${date}`, { date, kind: 'skipped', resurfaceAfter: BRIEF_DATE });
+  }
+  addEvent(db, 'deferred', 'future-schedule', { date: '2026-09-08', kind: 'skipped', resurfaceAfter: '2026-09-10' });
+  addEvent(db, 'consumed', 'used-in-brief', { date: '2026-09-08', kind: 'included' });
+  for (const id of ['due', 'deferred', 'consumed', 'cited-only']) {
+    addEvent(db, id, `cited-${id}`, { date: BRIEF_DATE, kind: 'cited' });
+  }
+  const result = guide(db);
+  assert.deepEqual(result.candidates.map((r) => r.item_id), ['due', 'cited-only']);
+  assert.equal(result.candidates[0]!.consecutive_skips, 3);
+  assert.equal(result.candidates[0]!.effective_confidence, 0.8);
+  assert.doesNotMatch(result.candidates[0]!.why_now, /Lower priority/);
+  assert.equal(result.skip_items.find((r) => r.item_id === 'deferred')?.reason, 'deferred until 2026-09-10');
+  assert.equal(result.skip_items.find((r) => r.item_id === 'consumed')?.reason, 'recently included on 2026-09-08');
+});
+
+test('brief consumption interrupts skip streaks and historical briefs ignore later skip dates', (t) => {
+  const db = openMemoryDatabase(); t.after(() => db.close());
+  addItem(db, 'rescheduled');
+  for (const date of ['2026-09-04', '2026-09-05', '2026-09-06']) {
+    addEvent(db, 'rescheduled', `skip-${date}`, { date, kind: 'skipped' });
+  }
+  addEvent(db, 'rescheduled', 'included', { date: '2026-09-07', kind: 'included' });
+  addEvent(db, 'rescheduled', 'new-schedule', { date: '2026-09-08', kind: 'skipped', resurfaceAfter: BRIEF_DATE });
+  addEvent(db, 'rescheduled', 'future-skip', { date: '2026-09-10', kind: 'skipped' });
+  assert.equal(guide(db).candidates[0]!.consecutive_skips, 1);
 });

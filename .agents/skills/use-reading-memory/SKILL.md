@@ -52,6 +52,10 @@ Use returned items as evidence, not as final answers. If query results are weak 
 
 Read `match_strategy` and `matched_terms`: partial matches may cover only part of the question. Lexical retrieval may miss paraphrases without shared terms. `confidence: null` means uncalibrated, and the compatibility `answer` field is empty. Do not turn the number of results or a lexical score into certainty. Use `GET /items/:id` for truncation, rationale, annotations, and relationship evidence. Add `?include=text` only when you need the retained source text to verify a claim; default item reads omit that potentially large field.
 
+Use optional `mode: "fts+usage"` when previously useful sources should receive a modest preference. The default `fts` keeps pure lexical ranking. Inspect `results[].usage` for the lexical score, recorded use count, and bounded multiplier. Usage may break ties but never establishes correctness or reader agreement. `GET /items/:id` reports `usage_count` and `last_used_at`; zero means no positive use was recorded, not proof the source was never useful.
+
+After a stored source actually contributes to a finalized answer, call `POST /brief-events` with `event_kind: "cited"`, `included_bool: true`, the UTC use date in `brief_date`, a stable answer identifier in `source_context`, and a rationale identifying the supported claim. Reuse the same request ID for retries. Do not record citations for sources merely retrieved, inspected, or discarded, and do not infer endorsement from use. Do not double-record a brief inclusion as a citation for the same use. Citation events cannot set `resurface_after` and do not consume a brief appearance or change its pending schedule.
+
 ## Preserve Reader Judgment
 
 Use `POST /items/:id/annotations` for an explicit reader reaction, question, or correction worth preserving. Provide a fresh `request_id`, `actor_type` (`user` or `agent`), `actor`, and exact `note`; optionally include `project` and `question`. User notes must reflect statements the user actually made. Label your own interpretations as agent notes. Saving, citing, or including a source in a brief does not mean the user agrees with it.
@@ -64,13 +68,13 @@ Use `ingest_reason` and `source_context` to explain why a new capture matters. D
 
 Call `POST /brief-guide` when preparing a digest, morning brief, reading roundup, or source-selection pass.
 
-The endpoint returns candidates and rationale. It does not write or send the brief.
+The endpoint returns candidates and rationale. It does not write or send the brief. Three consecutive skipped brief dates lower priority and halve `effective_confidence`; original `confidence` remains visible. Inspect `consecutive_skips` and the selection explanation. An explicit due schedule overrides this demotion.
 
 After the digest or brief is finalized, call `POST /brief-events` to record which stored items were included or deliberately skipped. This lets later `/brief-guide` calls avoid stale repeats while still allowing an item to resurface when it has a new angle or reaches `resurface_after`.
 
 Brief event rules:
 - `brief_date` and `resurface_after` use `YYYY-MM-DD`.
-- `included` and `resurfaced` events must set `included_bool` to `true`.
+- `included`, `resurfaced`, and `cited` events must set `included_bool` to `true`.
 - `skipped` events must set `included_bool` to `false`.
 - Use `included` when a brief uses an item, `skipped` when a returned item is deliberately not used, and `resurfaced` when a previously deferred item reappears with a new angle.
 - Set `resurface_after` on an included item only when it should be eligible again after that date. Omitting it suppresses normal repeats after inclusion.

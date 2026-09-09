@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { extractHtml } from './extract-html.js';
+import { Readability } from '@mozilla/readability';
 
 test('extracts article text and metadata while excluding page chrome', () => {
   const html = readFileSync(new URL('./fixtures/article.html', import.meta.url), 'utf8');
@@ -156,7 +157,37 @@ test('keeps an authored single-sentence cookie article without accepting a conse
   const sentence = 'We use cookies to maintain authenticated sessions in our application.';
   assert.equal(extractHtml(`<article><p>${sentence}</p></article>`).text, sentence);
   assert.equal(extractHtml(`<div itemprop="articleBody"><p>${sentence}</p></div>`).text, sentence);
-  assert.equal(extractHtml(`<main><p>${sentence}</p><button>Accept all</button></main>`).text, '');
-  assert.equal(extractHtml(`<article><p>${sentence}</p><button>Accept all</button></article>`).text, '');
-  assert.equal(extractHtml(`<article><p>${sentence}</p><form><button>Accept all</button></form></article>`).text, '');
+  assert.equal(extractHtml(`<main><p>We use cookies to personalize content.</p><button>Accept all</button></main>`).text, '');
+  assert.equal(extractHtml(`<article><p>We use cookies to personalize content.</p><button>Accept all</button></article>`).text, '');
+  assert.equal(extractHtml(`<article><p>We use cookies to personalize content.</p><form><button>Accept all</button></form></article>`).text, '');
+});
+
+test('shell classification preserves complete technical statements regardless of their prefix or markup', () => {
+  for (const sentence of [
+    'We use cookies in this experiment.',
+    'By clicking the icon twice, users can reset the cache.',
+    'We use cookies to maintain authenticated sessions in our application.',
+    'We process personal data only inside the isolated test environment.'
+  ]) {
+    assert.equal(extractHtml(`<main><p>${sentence}</p></main>`).text, sentence);
+    assert.equal(extractHtml(structured(publicArticle(sentence))).text, sentence);
+  }
+});
+
+test('visible fallback skips placeholders and boilerplate before selecting the first usable root', (t) => {
+  t.mock.method(Readability.prototype, 'parse', () => null);
+  for (const html of [
+    '<div itemprop="articleBody"></div><article><p>Usable later article.</p></article>',
+    '<div itemprop="articleBody"></div><main><p>Usable later article.</p></main>',
+    '<div itemprop="articleBody"></div><div itemprop="articleBody"><p>Usable later article.</p></div>',
+    '<div itemprop="articleBody"><p>We use cookies to personalize content.</p></div><div itemprop="articleBody"><p>Usable later article.</p></div>',
+    '<article><p>We use cookies to personalize content.</p></article><article><p>Usable later article.</p></article>',
+    '<main><p>We use cookies to personalize content.</p></main><main><p>Usable later article.</p></main>'
+  ]) {
+    const result = extractHtml(html);
+    assert.equal(result.extractor, 'html-fallback');
+    assert.equal(result.text, 'Usable later article.');
+  }
+  const first = extractHtml('<div itemprop="articleBody"><p>First substantive body.</p></div><div itemprop="articleBody"><p>Later substantive body.</p></div>');
+  assert.equal(first.text, 'First substantive body.');
 });

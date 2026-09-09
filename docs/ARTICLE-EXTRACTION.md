@@ -2,11 +2,11 @@
 
 HTML capture rejects recognizable consent-only and navigation-only output before analysis or indexing. The API returns `FETCH_FAILED` with status 422 when no usable article text remains. The error contains no source text. A failed capture can remain in diagnostics; it is not evidence for answering a question.
 
-This is a conservative check of extracted content, not a word-count threshold or a topic filter. Short substantive notes and articles about cookies or privacy remain eligible. Ambiguous first-person cookie statements can be retained when they occur in explicit article markup without local consent controls; the same statement in a page-control shell is rejected. It cannot recognize every language or custom consent interface. A successful extraction does not certify that the complete article was captured.
+This is a conservative check of extracted content, not a word-count threshold or a topic filter. Short substantive notes and articles about cookies or privacy remain eligible. Only complete recognized UI phrases count as boilerplate; a technical sentence that begins with “We use cookies” or “By clicking” remains eligible. It cannot recognize every language or custom consent interface. A successful extraction does not certify that the complete article was captured.
 
 ## Fallback behavior
 
-Readability remains the first extractor. Visible server-rendered `article`, `main`, or `itemprop="articleBody"` markup can also supply text after page controls are removed. No scripts execute and no subresources are loaded.
+Readability remains the first extractor. Visible server-rendered `article`, `main`, or `itemprop="articleBody"` markup can also supply text after page controls are removed. The fallback checks up to 16 roots per category in priority order (articleBody, article, main); an empty or boilerplate candidate does not prevent a later usable candidate from being captured. No scripts execute and no subresources are loaded.
 
 When visible output is unusable, the extractor can read a single unambiguous `articleBody` string from schema.org JSON-LD with a recognized article type and explicit `isAccessibleForFree: true`. Arrays and `@graph` wrappers are supported. Explicit `url`, `@id`, or `mainEntityOfPage` identities must match the fetched page after resolving relative URLs and removing fragments. Conflicting, malformed, or unrelated identities cannot supply a body; no identity URLs are fetched. Metadata descriptions, arbitrary framework state, invalid JSON, unknown access status, and restricted bodies are not article content sources. The fallback never signs in, clicks consent controls, renders a client application, or circumvents a subscription gate.
 

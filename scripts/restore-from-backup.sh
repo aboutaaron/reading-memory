@@ -13,15 +13,16 @@
 #   2. Detect the runner — systemd user unit, launchd LaunchAgent, or
 #      neither — and stop the service if it's running.
 #   3. Take a timestamped safety copy of the live db before overwriting.
-#   4. Copy the chosen backup over READING_API_DB.
+#   4. Atomically replace READING_API_DB with a private copy of the backup.
 #   5. Run PRAGMA integrity_check on the restored db; abort and roll back
-#      to the safety copy if it doesn't return "ok".
+#      to the private safety copy if it doesn't return "ok".
 #   6. Restart the service via the same runner that stopped it.
 #
 # Idempotent: safe to re-run, safe if the service isn't running, safe if
 # no backups exist (exits non-zero with a clear message).
 
 set -euo pipefail
+umask 077
 
 ENV_FILE="${READING_API_ENV_FILE:-$HOME/.reading-api/env}"
 if [ -f "$ENV_FILE" ]; then
@@ -101,16 +102,6 @@ stop_service() {
   esac
 }
 
-# WAL-mode SQLite spreads state across the .sqlite + .sqlite-wal +
-# .sqlite-shm triple. When we drop a fresh file in over the live db, the
-# old sidecars become inconsistent with the new contents and SQLite
-# reports the result as "malformed" on the next open. Always clear the
-# sidecars when the .sqlite file is being replaced; SQLite recreates them
-# as needed when the new db is opened.
-clear_sidecars() {
-  rm -f "${DB_PATH}-wal" "${DB_PATH}-shm"
-}
-
 start_service() {
   case "$RUNNER" in
     launchd)
@@ -127,68 +118,18 @@ start_service() {
   esac
 }
 
-# Take a self-contained snapshot of the live db using SQLite's VACUUM INTO.
-# A plain cp of $DB_PATH would miss any committed WAL state that hadn't been
-# checkpointed yet — the service does checkpoint on its SIGTERM handler, but
-# a rollback shouldn't depend on that having actually finished. VACUUM INTO
-# consolidates committed-but-unmerged WAL into the snapshot regardless.
-take_safety_snapshot() {
-  local target="$1"
-  node -e '
-    const { DatabaseSync } = require("node:sqlite");
-    const db = new DatabaseSync(process.argv[1]);
-    const escaped = process.argv[2].replaceAll("\x27", "\x27\x27");
-    db.exec("VACUUM INTO \x27" + escaped + "\x27");
-    db.close();
-  ' "$DB_PATH" "$target"
-}
-
-# Use Node's built-in sqlite for the integrity check so we don't depend
-# on the sqlite3 CLI being installed.
-verify_db() {
-  local target="$1"
-  node -e "
-    const { DatabaseSync } = require('node:sqlite');
-    const db = new DatabaseSync(process.argv[1], { readOnly: true });
-    const row = db.prepare('PRAGMA integrity_check').get();
-    db.close();
-    const result = row && Object.values(row)[0];
-    if (result !== 'ok') {
-      console.error('integrity_check failed:', JSON.stringify(row));
-      process.exit(1);
-    }
-    console.log('integrity_check: ok');
-  " "$target"
-}
-
 stop_service
 
-SAFETY=""
-if [ -f "$DB_PATH" ]; then
-  SAFETY="${DB_PATH}.before-restore-$(date -u +%Y%m%dT%H%M%SZ)"
-  take_safety_snapshot "$SAFETY"
-  echo "Safety snapshot: $SAFETY"
-fi
-
-clear_sidecars
-cp "$BACKUP" "$DB_PATH"
-echo "Restored $BACKUP -> $DB_PATH"
-
-if ! verify_db "$DB_PATH"; then
-  echo "restore: integrity_check failed on the restored db." >&2
-  if [ -n "$SAFETY" ]; then
-    echo "Rolling back to safety copy: $SAFETY" >&2
-    clear_sidecars
-    cp "$SAFETY" "$DB_PATH"
-  fi
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if node "$SCRIPT_DIR/restore-sqlite.mjs" "$BACKUP" "$DB_PATH"; then
   start_service
-  exit 1
-fi
-
-start_service
-
-echo "Restore complete."
-if [ -n "$SAFETY" ]; then
-  echo "Pre-restore copy preserved at: $SAFETY"
-  echo "Delete it once you're sure the restored db is good."
+  echo "Restore complete. Keep the private safety snapshot until the restored database is verified."
+else
+  status=$?
+  if [ "$status" -eq 2 ]; then
+    echo "restore: recovery requires manual attention; service left stopped." >&2
+  else
+    start_service
+  fi
+  exit "$status"
 fi

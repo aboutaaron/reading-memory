@@ -208,6 +208,7 @@ Both `included` and `resurfaced` now count as consumption. Recording `resurfaced
 cd ~/reading-memory
 npm ci
 npm run build
+install -d -m 700 ~/.reading-api ~/backups/reading-memory
 mkdir -p ~/.config/systemd/user
 cp systemd/reading-memory.service ~/.config/systemd/user/
 cp systemd/reading-memory-backup.service systemd/reading-memory-backup.timer ~/.config/systemd/user/
@@ -217,7 +218,11 @@ systemctl --user enable --now reading-memory-backup.timer
 systemctl --user status reading-memory.service
 ```
 
-The unit binds to loopback and stores data outside the git checkout at `~/.reading-api/reading.sqlite`.
+The unit binds to loopback and stores data outside the git checkout at `~/.reading-api/reading.sqlite`. Both service and backup units use `UMask=0077`; the checkout remains read-only to the service. The only writable sandbox exceptions are the dedicated data and backup directories. Create those directories before starting systemd, and run setup and maintenance as the same ordinary user that runs the service. Custom data/backup paths require matching unit overrides.
+
+Direct API startup also sets a private umask. Database opens and maintenance enforce mode 0700 on the configured app-owned leaf directories and mode 0600 on the database, SQLite sidecars, backups, and safety snapshots. Choose dedicated directories: shared roots such as the home directory, temporary root, and checkout itself are rejected. Existing ancestors are never recursively chmodded. Final directory symlinks, file symlinks, hard-linked files, and paths owned by another user are rejected instead of modifying their targets.
+
+Repository tests verify these file modes, committed WAL capture, backup integrity, atomic restore and rollback, and service-unit settings using temporary directories and mocked service commands. They do not establish that a particular host is ready. On the deployment host, separately verify loopback binding and firewall rules, available disk space, effective systemd sandbox settings and paths, the backup timer's last successful run, and a restore drill into a disposable database. Keep production stopped if restore and rollback both fail; inspect the retained safety snapshot before restarting.
 
 Before storing real reading material on each deployment, verify the host itself: confirm deny-by-default firewall rules with required SSH access retained, at least 15 GB of free disk space, an authenticated localhost smoke request, and a listener restricted to `127.0.0.1`. Run a backup and restore drill on disposable data and check file ownership and permissions. Repository tests do not certify a host's firewall, storage or service installation.
 
@@ -231,7 +236,7 @@ Daily backup command:
 READING_API_DB=~/.reading-api/reading.sqlite READING_API_BACKUP_DIR=~/backups/reading-memory ./scripts/backup-sqlite.sh
 ```
 
-Backups are written with private permissions and emit a JSON report containing source, destination, size, and integrity status.
+Backups are created privately, checked with `PRAGMA integrity_check`, and published atomically without overwriting an existing destination. They include committed WAL state and emit a JSON report containing source, destination, size, and integrity status. Thirty-day retention applies only to matching files directly inside the configured backup directory.
 
 The deployed user timer runs the same script daily:
 
@@ -249,7 +254,7 @@ Restore drill:
 ./scripts/restore-from-backup.sh ~/backups/reading-memory/reading-20260601T032000Z.sqlite
 ```
 
-The script sources `~/.reading-api/env`, detects the runner (systemd user unit or macOS LaunchAgent), stops the service, takes a timestamped safety copy of the current db (`reading.sqlite.before-restore-<UTC>`), clears stale WAL/SHM sidecars, copies the chosen backup over `READING_API_DB`, runs `PRAGMA integrity_check`, and restarts the service. If integrity fails it rolls back to the safety copy automatically. Delete the safety copy by hand once you're confident the restored db is good.
+The script sources `~/.reading-api/env`, detects the runner (systemd user unit or macOS LaunchAgent), stops the service, takes a private timestamped safety snapshot of the current db (`reading.sqlite.before-restore-<UTC>-<id>`), clears stale sidecars, atomically replaces `READING_API_DB` with a private copy of the backup, runs `PRAGMA integrity_check`, and restarts the service. If integrity fails it restores and verifies the safety snapshot automatically. If rollback also fails, it leaves the service stopped and reports the safety path. Delete the safety copy by hand once you're confident the restored db is good.
 
 If you'd rather run the restore by hand:
 
@@ -258,13 +263,10 @@ If you'd rather run the restore by hand:
 systemctl --user stop reading-memory.service     # systemd
 launchctl bootout gui/$(id -u)/com.aboutaaron.reading-memory   # launchd
 
-# clear stale sidecars before swapping the .sqlite, otherwise SQLite
-# will see a mismatched WAL/SHM and report "malformed".
-rm -f ~/.reading-api/reading.sqlite-wal ~/.reading-api/reading.sqlite-shm
-cp ~/backups/reading-memory/reading-YYYYMMDDTHHMMSSZ.sqlite ~/.reading-api/reading.sqlite
+# use the same private snapshot/atomic replacement/integrity/rollback helper
+node scripts/restore-sqlite.mjs ~/backups/reading-memory/reading-YYYYMMDDTHHMMSSZ.sqlite ~/.reading-api/reading.sqlite
 
-# verify and restart
-node -e "const { DatabaseSync } = require('node:sqlite'); const db = new DatabaseSync(process.argv[1], { readOnly: true }); console.log(db.prepare('PRAGMA integrity_check').get()); db.close();" ~/.reading-api/reading.sqlite
+# restart only after a successful restore or verified rollback
 systemctl --user start reading-memory.service     # systemd
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.aboutaaron.reading-memory.plist   # launchd
 ```

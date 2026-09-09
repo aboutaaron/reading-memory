@@ -1,8 +1,12 @@
+import { privateDirectory } from './filesystem/private-files.js';
 import { loadConfig } from './config.js';
 import { openDatabase } from './db/connection.js';
 import { createReadingApi } from './api/server.js';
 
+process.umask(0o077);
 const config = loadConfig();
+privateDirectory(config.dataDir);
+privateDirectory(config.backupDir);
 const db = openDatabase(config.dbPath);
 const server = createReadingApi(config, db);
 

@@ -35,6 +35,8 @@ After finalizing a digest or brief, use POST /brief-events to record which store
 Reading Memory never replies to the user directly. The calling agent owns final presentation.
 ```
 
+Authenticated POST error responses echo a valid UUID `request_id` from the parsed JSON body, including when other fields fail validation. Invalid or missing body IDs, malformed JSON, and errors before body parsing use `X-Request-ID` when supplied, otherwise `null`. Authentication runs before body parsing.
+
 Minimal `POST /ingest` body:
 
 ```json
@@ -283,4 +285,4 @@ The deployed default path is:
 ~/.reading-api/flue-events.jsonl
 ```
 
-Reading Memory does not persist full Flue transcripts. The runtime's per-analysis conversation is opaque and ephemeral; use the redacted JSONL trace for operational debugging. Existing `sessions` rows may remain in databases upgraded from the pre-1.0 Flue integration, but the current analyzer does not read or write them.
+Reading Memory does not persist full Flue transcripts. The runtime's per-analysis conversation is opaque and ephemeral; use the redacted JSONL trace for operational debugging. Schema v4 omits the unused `sessions` table in new databases and removes it on upgrade only when empty. Nonempty legacy tables and their rows are preserved; the current analyzer does not read or write them.

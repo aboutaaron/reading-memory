@@ -179,6 +179,39 @@ test('refuses databases newer than current schema version', () => {
   assert.throws(() => migrate(db), /newer than this service/);
 });
 
+test('fresh databases omit the unused sessions table', () => {
+  const db = openMemoryDatabase();
+  assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name = 'sessions'").get(), undefined);
+  db.close();
+});
+
+for (const legacyState of ['missing', 'empty', 'populated'] as const) {
+  test(`v4 migration handles a ${legacyState} legacy sessions table without losing data`, () => {
+    const db = openMemoryDatabase();
+    db.exec('PRAGMA user_version = 3');
+    if (legacyState !== 'missing') {
+      db.exec('CREATE TABLE sessions (id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at TEXT NOT NULL)');
+      if (legacyState === 'populated') {
+        db.prepare('INSERT INTO sessions VALUES (?, ?, ?)').run('legacy-session', '{"opaque":true}', '2026-01-01');
+      }
+    }
+    migrate(db);
+    assert.equal(db.prepare('PRAGMA user_version').get()?.user_version, CURRENT_USER_VERSION);
+    const table = db.prepare("SELECT name FROM sqlite_master WHERE name = 'sessions'").get();
+    if (legacyState === 'populated') {
+      assert.ok(table);
+      assert.deepEqual({ ...db.prepare('SELECT * FROM sessions').get() }, {
+        id: 'legacy-session', data: '{"opaque":true}', updated_at: '2026-01-01'
+      });
+    } else {
+      assert.equal(table, undefined);
+    }
+    assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), []);
+    assert.doesNotThrow(() => migrate(db), 'reopening the migrated database must be safe');
+    db.close();
+  });
+}
+
 test('does not rebuild FTS rows for incomplete ingests', () => {
   const db = openMemoryDatabase();
   db.prepare(`

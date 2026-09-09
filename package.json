@@ -34,7 +34,8 @@
     "smoke": "tsx scripts/smoke-test.ts",
     "traces": "tsx scripts/inspect-traces.ts",
     "prepare": "npm run build",
-    "backfill:embeddings": "node --import tsx scripts/backfill-embeddings.ts"
+    "backfill:embeddings": "node --import tsx scripts/backfill-embeddings.ts",
+    "compare:analyzers": "node --import tsx scripts/compare-analyzers.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.91.1",

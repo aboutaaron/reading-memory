@@ -68,7 +68,8 @@ test('forget rejects in-flight analysis and a stale late completion cannot recre
   try {
     const source = await extractSource({ request_id: randomUUID(), source_type: 'text', source: { text: 'Memory must not resurrect deleted content.' } });
     let release!: () => void;
-    const pending = store.ingest({ principal: 'local', requestId: randomUUID(), payloadHash: source.contentHash, source,
+    const requestId = randomUUID();
+    const pending = store.ingest({ principal: 'local', requestId, payloadHash: source.contentHash, source,
       analyze: async (itemId) => { await new Promise<void>((resolve) => { release = resolve; }); return analyzeItem(db, { itemId, title: null, text: source.extractedText }); } });
     await Promise.resolve();
     const itemId = db.prepare('SELECT id FROM items').get()?.id as string;
@@ -78,6 +79,37 @@ test('forget rejects in-flight analysis and a stale late completion cannot recre
     release();
     await assert.rejects(pending, { code: 'NOT_FOUND' });
     assert.equal(db.prepare('SELECT count(*) AS n FROM analyses').get()?.n, 0);
+    await assert.rejects(store.ingest({ principal: 'local', requestId, payloadHash: source.contentHash, source,
+      analyze: async () => { throw new Error('A retired request must not reach analysis'); } }), { code: 'ITEM_FORGOTTEN' });
+  } finally { db.close(); }
+});
+
+test('forget retires all failed ingest attempts before extraction and permits only a fresh intentional request', async () => {
+  const { db, store } = fixture();
+  try {
+    const source = await extractSource({ request_id: randomUUID(), source_type: 'text', source: { text: 'private failed source words' } });
+    const attempts = [randomUUID(), randomUUID()];
+    for (const requestId of attempts) {
+      await assert.rejects(store.ingest({ principal: 'local', requestId, payloadHash: source.contentHash, source,
+        analyze: async () => { throw new Error('provider unavailable'); } }), /provider unavailable/);
+    }
+    const itemId = db.prepare("SELECT id FROM items WHERE status = 'failed'").get()?.id as string;
+    assert.ok(itemId);
+    assert.equal(db.prepare('SELECT count(*) AS n FROM idempotency_keys').get()?.n, 0);
+    store.forget({ itemId, principal: 'local' });
+    for (const requestId of attempts) {
+      const retired = db.prepare('SELECT response_snapshot, expires_at FROM idempotency_keys WHERE request_id = ?').get(requestId)!;
+      assert.equal(retired.response_snapshot, '{"forgotten":true}');
+      assert.ok(String(retired.expires_at) > '9999-01-01');
+      await assert.rejects(new ItemStore(db).ingest({ principal: 'local', requestId, payloadHash: source.contentHash,
+        extract: async () => { throw new Error('A retired request must not fetch private content'); },
+        analyze: async () => { throw new Error('A retired request must not call the provider'); } }), { code: 'ITEM_FORGOTTEN' });
+    }
+    assert.equal(db.prepare('SELECT count(*) AS n FROM items').get()?.n, 0);
+    assert.doesNotMatch(JSON.stringify(db.prepare('SELECT * FROM idempotency_keys').all()), /private failed source words/);
+    const fresh = await store.ingest({ principal: 'local', requestId: randomUUID(), payloadHash: source.contentHash, source,
+      analyze: async (id) => analyzeItem(db, { itemId: id, title: null, text: source.extractedText }) });
+    assert.notEqual(fresh.item_id, itemId);
   } finally { db.close(); }
 });
 

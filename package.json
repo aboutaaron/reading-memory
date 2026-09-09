@@ -7,6 +7,21 @@
   "bin": {
     "reading-memory": "./scripts/setup.mjs"
   },
+  "files": [
+    "dist/",
+    "src/",
+    "scripts/",
+    ".agents/",
+    "docs/",
+    "systemd/",
+    "launchd/",
+    ".env.example",
+    "tsconfig.json",
+    "AGENTS.md",
+    "ARCHITECTURE.md",
+    "DEVELOPMENT.md",
+    "README.md"
+  ],
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "node --enable-source-maps dist/src/index.js",

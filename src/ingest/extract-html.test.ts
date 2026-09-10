@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { extractHtml } from './extract-html.js';
 import { Readability } from '@mozilla/readability';
+import { HTMLElement } from 'linkedom';
 
 test('extracts article text and metadata while excluding page chrome', () => {
   const html = readFileSync(new URL('./fixtures/article.html', import.meta.url), 'utf8');
@@ -79,6 +80,7 @@ test('rejects complete analytics preference notices without cookie words or cont
     `<article><p>${analyticsNotice}</p></article>`,
     `<main><p>${analyticsNotice}</p><q>Accept all</q></main>`,
     `<main><p>${analyticsNotice}</p><blockquote>Privacy policy</blockquote></main>`,
+    '<main><blockquote>We use analytics and advertising tools by default.</blockquote><blockquote>You can update this anytime.</blockquote></main>',
     structured(publicArticle(analyticsNotice))
   ];
   for (const html of cases) assert.equal(extractHtml(html).text, '');
@@ -115,6 +117,32 @@ test('a rejected analytics notice permits public structured article recovery', (
   const result = extractHtml(html);
   assert.equal(result.text, 'Actual public article body.');
   assert.equal(result.extractor, 'structured-article-body');
+});
+
+test('notice quote inspection skips ordinary prose and scans nested quotations only once', (t) => {
+  t.mock.method(Readability.prototype, 'parse', () => null);
+  // Count text-extraction walks rather than wall-clock time. Increasing quote
+  // depth must not increase overlapping subtree inspections.
+  let quoteWalks = 0;
+  const querySelectorAll = HTMLElement.prototype.querySelectorAll;
+  t.mock.method(HTMLElement.prototype, 'querySelectorAll', function (this: HTMLElement, selector: string) {
+    if ((this.tagName === 'Q' || this.tagName === 'BLOCKQUOTE') && selector === 'script,style,noscript,template,head,svg') quoteWalks++;
+    return querySelectorAll.call(this, selector);
+  });
+  for (const depth of [8, 64, 192]) {
+    const nested = (text: string) => '<blockquote>'.repeat(depth) + text + '</blockquote>'.repeat(depth);
+    quoteWalks = 0;
+    assert.equal(extractHtml(`<main>${nested('An authored observation about memory.')}</main>`).text, 'An authored observation about memory.');
+    assert.equal(quoteWalks, 0, `ordinary prose at depth ${depth}`);
+
+    quoteWalks = 0;
+    assert.equal(extractHtml(`<main><p>${analyticsNotice}</p>${nested('Accept all')}</main>`).text, '');
+    assert.equal(quoteWalks, 1, `unrelated quoted UI at depth ${depth}`);
+
+    quoteWalks = 0;
+    assert.equal(extractHtml(`<main>${nested(analyticsNotice)}</main>`).text, analyticsNotice);
+    assert.equal(quoteWalks, 1, `authored quoted notice at depth ${depth}`);
+  }
 });
 
 test('rejects consent-only shells, navigation-only pages, and metadata descriptions', () => {

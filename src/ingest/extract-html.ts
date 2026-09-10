@@ -113,7 +113,20 @@ function hasArticleText(root: HtmlNode, sourceProseAnchors?: ReadonlySet<string>
   for (const node of candidate.querySelectorAll('button,input,select,h1,h2,h3,script,style,noscript,template,head,svg')) node.remove();
   const text = textFromNode(candidate);
   if (!text) return false;
-  const units = text.split(/\n+|(?<=[.!?])\s+/).map(value => value.trim()).filter(Boolean);
+  const splitUnits = (value: string) => value.split(/\n+|(?<=[.!?])\s+/).map(unit => unit.trim()).filter(Boolean);
+  const units = splitUnits(text);
+  // Some notices never mention cookies or expose recognizable control markup.
+  // Recognize this complete declaration + preference instruction together;
+  // neither sentence alone establishes a consent shell. Do not classify an
+  // authored quotation or a notice accompanied by substantive discussion as UI.
+  const defaults = /^we use (?:analytics and advertising|advertising and analytics) tools by default[.!]?$/i;
+  const preferences = /^you can (?:update|change) (?:this|these (?:settings|preferences)|your (?:settings|preferences)) (?:anytime|at any time)[.!]?$/i;
+  const quoted = [...candidate.querySelectorAll('blockquote,q')].some(node => {
+    const quotedUnits = splitUnits(textFromNode(node.cloneNode(true) as HtmlNode));
+    return quotedUnits.some(unit => defaults.test(unit)) && quotedUnits.some(unit => preferences.test(unit));
+  });
+  if (!quoted && units.some(unit => defaults.test(unit)) && units.some(unit => preferences.test(unit)) &&
+    units.every(unit => defaults.test(unit) || preferences.test(unit) || shell.some(pattern => pattern.test(unit)))) return false;
   return units.some(unit => !shell.some(pattern => pattern.test(unit)));
 }
 

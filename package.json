@@ -28,6 +28,7 @@
     "build": "tsc -p tsconfig.json && mkdir -p dist/src/db && cp src/db/schema.sql dist/src/db/schema.sql && cp src/ingest/pdf-worker.mjs dist/src/ingest/pdf-worker.mjs && rm -rf dist/.agents && cp -R .agents dist/.agents",
     "test": "node --test --import tsx 'src/**/*.test.ts' 'scripts/**/*.test.mjs'",
     "eval:reading": "node --import tsx src/evals/reading-memory-eval.ts",
+    "eval:answer-sources": "node --import tsx src/evals/answer-source-eval.ts",
     "reanalyze": "node --import tsx scripts/reanalyze.ts",
     "backfill:titles": "node --import tsx scripts/backfill-titles.ts",
     "run-ledger": "node scripts/run-ledger.mjs",

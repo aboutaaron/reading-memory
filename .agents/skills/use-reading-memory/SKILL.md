@@ -52,6 +52,12 @@ Lexical search is the default. If the service has embeddings configured, `mode: 
 
 Use returned items as evidence, not as final answers. If query results are weak or empty, say so.
 
+For a comparison of named sources, identify and open each requested source with `GET /items/:id?include=text` before comparing their claims. Check truncation and distinguish a retained excerpt from a complete article. A related essay is not a substitute for a missing requested source: identify the gap and qualify or withhold that part of the comparison. If a recollection is ambiguous, clarify the intended sources or explicitly name the interpretation you are using.
+
+With opt-in `mode: "hybrid+graph"`, inspect the actual graph relationship labels, explanations, direction, quotations and origin as unverified interpretations. Verify their meaning against opened source text; exact quotations do not prove support or contradiction. Preserve the source's qualifications and avoid turning thematic similarity into corroboration.
+
+Use `source_family` metadata only when it is actually returned. Same publisher, similar titles and topical overlap do not establish a family. Missing metadata or `resolution: "bounded_fallback"` leaves family identity uncertain. Recognized repeated captures count as one source family; distinct families still do not prove independent reporting. State uncertainty rather than inventing either equivalence or independence.
+
 Read `match_strategy` and `matched_terms`: partial matches may cover only part of the question. Lexical retrieval may miss paraphrases without shared terms. `confidence: null` means uncalibrated, and the compatibility `answer` field is empty. Do not turn the number of results or a lexical score into certainty. Use `GET /items/:id` for truncation, rationale, annotations, and relationship evidence. Add `?include=text` only when you need the retained source text to verify a claim; default item reads omit that potentially large field.
 
 Use optional `mode: "fts+usage"` when previously useful sources should receive a modest preference. The default `fts` keeps pure lexical ranking. Inspect `results[].usage` for the lexical score, recorded use count, and bounded multiplier. Usage may break ties but never establishes correctness or reader agreement. `GET /items/:id` reports `usage_count` and `last_used_at`; zero means no positive use was recorded, not proof the source was never useful.

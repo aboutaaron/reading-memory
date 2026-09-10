@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { extractHtml } from './extract-html.js';
 import { Readability } from '@mozilla/readability';
+import { HTMLElement } from 'linkedom';
 
 test('extracts article text and metadata while excluding page chrome', () => {
   const html = readFileSync(new URL('./fixtures/article.html', import.meta.url), 'utf8');
@@ -67,6 +68,82 @@ test('uses JSON-LD article metadata and bounds title metadata', () => {
 const structured = (body: Record<string, unknown> | Record<string, unknown>[]) =>
   `<html><head><script type="application/ld+json">${JSON.stringify(body)}</script></head><body><nav><a href="/">Home</a></nav><div><p>We use cookies to personalize content.</p><button>Accept all</button></div></body></html>`;
 const publicArticle = (articleBody: string) => ({ '@context': 'https://schema.org', '@type': 'NewsArticle', isAccessibleForFree: true, articleBody });
+
+const analyticsNotice = 'We use analytics and advertising tools by default. You can update this anytime.';
+
+test('rejects complete analytics preference notices without cookie words or control markup', (t) => {
+  const cases = [
+    `<html><head><title>Example article</title></head><body><main><p>${analyticsNotice}</p></main></body></html>`,
+    '<main><p>We use analytics and advertising tools by default.</p><p>You can update this anytime.</p></main>',
+    '<main><p>We use <strong>analytics and advertising</strong> tools by default. <span>You can update this anytime.</span></p></main>',
+    '<main><p>We use advertising and analytics tools by default. You can change your settings at any time.</p><button>Accept all</button><a href="/privacy">Privacy policy</a></main>',
+    `<article><p>${analyticsNotice}</p></article>`,
+    `<main><p>${analyticsNotice}</p><q>Accept all</q></main>`,
+    `<main><p>${analyticsNotice}</p><blockquote>Privacy policy</blockquote></main>`,
+    '<main><blockquote>We use analytics and advertising tools by default.</blockquote><blockquote>You can update this anytime.</blockquote></main>',
+    structured(publicArticle(analyticsNotice))
+  ];
+  for (const html of cases) assert.equal(extractHtml(html).text, '');
+  t.mock.method(Readability.prototype, 'parse', () => null);
+  for (const html of cases) assert.equal(extractHtml(html).text, '');
+});
+
+test('compound notice detection preserves standalone statements, discussion, and authored quotations', () => {
+  const prose = [
+    'We use analytics and advertising tools by default.',
+    'You can update this anytime.',
+    'We use analytics and advertising tools by default in the benchmark. You can update this anytime.',
+    `${analyticsNotice} This wording makes opting out difficult to discover.`,
+    `The notice says: “${analyticsNotice}”`,
+    'Analytics and advertising tools expose different privacy risks.',
+    'The vote passed.'
+  ];
+  for (const text of prose) {
+    assert.equal(extractHtml(`<main><p>${text}</p></main>`).text, text);
+    assert.equal(extractHtml(structured(publicArticle(text))).text, text);
+  }
+  for (const tag of ['blockquote', 'q']) {
+    assert.equal(extractHtml(`<article><${tag}>${analyticsNotice}</${tag}></article>`).text, analyticsNotice);
+  }
+  assert.equal(extractHtml('<article><blockquote><p>We use analytics and advertising tools by default.</p><p>You can update this anytime.</p></blockquote></article>').text,
+    'We use analytics and advertising tools by default.\n\nYou can update this anytime.');
+  const linked = `<article><p><a href="/research">${prose[2]}</a></p></article>`;
+  assert.equal(extractHtml(linked).text, prose[2]);
+});
+
+test('a rejected analytics notice permits public structured article recovery', () => {
+  const html = structured(publicArticle('Actual public article body.')).replace(
+    '<p>We use cookies to personalize content.</p><button>Accept all</button>', `<p>${analyticsNotice}</p>`);
+  const result = extractHtml(html);
+  assert.equal(result.text, 'Actual public article body.');
+  assert.equal(result.extractor, 'structured-article-body');
+});
+
+test('notice quote inspection skips ordinary prose and scans nested quotations only once', (t) => {
+  t.mock.method(Readability.prototype, 'parse', () => null);
+  // Count text-extraction walks rather than wall-clock time. Increasing quote
+  // depth must not increase overlapping subtree inspections.
+  let quoteWalks = 0;
+  const querySelectorAll = HTMLElement.prototype.querySelectorAll;
+  t.mock.method(HTMLElement.prototype, 'querySelectorAll', function (this: HTMLElement, selector: string) {
+    if ((this.tagName === 'Q' || this.tagName === 'BLOCKQUOTE') && selector === 'script,style,noscript,template,head,svg') quoteWalks++;
+    return querySelectorAll.call(this, selector);
+  });
+  for (const depth of [8, 64, 192]) {
+    const nested = (text: string) => '<blockquote>'.repeat(depth) + text + '</blockquote>'.repeat(depth);
+    quoteWalks = 0;
+    assert.equal(extractHtml(`<main>${nested('An authored observation about memory.')}</main>`).text, 'An authored observation about memory.');
+    assert.equal(quoteWalks, 0, `ordinary prose at depth ${depth}`);
+
+    quoteWalks = 0;
+    assert.equal(extractHtml(`<main><p>${analyticsNotice}</p>${nested('Accept all')}</main>`).text, '');
+    assert.equal(quoteWalks, 1, `unrelated quoted UI at depth ${depth}`);
+
+    quoteWalks = 0;
+    assert.equal(extractHtml(`<main>${nested(analyticsNotice)}</main>`).text, analyticsNotice);
+    assert.equal(quoteWalks, 1, `authored quoted notice at depth ${depth}`);
+  }
+});
 
 test('rejects consent-only shells, navigation-only pages, and metadata descriptions', () => {
   for (const html of [

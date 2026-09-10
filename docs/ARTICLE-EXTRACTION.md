@@ -4,6 +4,8 @@ HTML capture rejects recognizable consent-only and navigation-only output before
 
 This is a conservative check of extracted content, not a word-count threshold or a topic filter. Short substantive notes and articles about cookies or privacy remain eligible. Linked prose sentences inside paragraphs or quotations remain content; navigation labels and bare link lists do not qualify on their own. Only complete recognized UI phrases count as boilerplate; a technical sentence that begins with “We use cookies” or “By clicking” remains eligible. It cannot recognize every language or custom consent interface. A successful extraction does not certify that the complete article was captured.
 
+A complete notice pairing an analytics/advertising default declaration with an instruction to change preferences also counts as boilerplate, even without cookie terminology or control markup. Either sentence alone, an explicitly quoted notice, and substantive discussion accompanying a notice remain eligible. This narrow content check applies before content-hash deduplication: two unrelated URLs serving the same rejected notice cannot become one successful item. Rejected extraction attempts leave existing failed captures and their version lineage unchanged; they do not create a new indexed item.
+
 ## Fallback behavior
 
 Readability remains the first extractor. Visible server-rendered `article`, `main`, or `itemprop="articleBody"` markup can also supply text after page controls are removed. The fallback checks up to 16 roots per category in priority order (articleBody, article, main); an empty or boilerplate candidate does not prevent a later usable candidate from being captured. No scripts execute and no subresources are loaded.

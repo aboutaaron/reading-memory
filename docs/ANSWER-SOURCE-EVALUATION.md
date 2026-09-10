@@ -48,6 +48,8 @@ For explicit comparisons, `requested_source_alignment.passed` combines the recei
 
 Missing-source disclosure is mechanically accepted only when the named intended source is absent from that case's **frozen supplied source set**. This does not establish absence from the whole corpus or the web. Distinguish “not available in this answer context,” “not found in this search,” and “does not exist.” A missing source cannot be declared simply because the answerer chose not to open a supplied source.
 
+A partial comparison must additionally open and cite every available intended source and identify exactly those available sources as the comparison subjects. A genuine quotation from a substitute essay does not satisfy this check. A full abstention does not need positive citation coverage, but it must declare no comparison and must not cite an unrelated substitute as part of its source observations. An optimistic manual alignment label cannot override these mechanical failures.
+
 Same publisher, similar title, topical overlap, or different URLs alone do not establish source-family identity. A positive family assertion requires complete family metadata in this scorer. Absent or `bounded_fallback` metadata supports uncertainty, not an invented equivalence or independence claim. Repeated captures with one recognized family cannot count as several independent sources. Different complete family IDs establish only distinct resolver families; independence remains unscored until separately reviewed. Graph labels remain unverified interpretations throughout.
 
 ## Attach a review without turning it into a model judge

@@ -75,6 +75,51 @@ test('truthful missing-source disclosure is tied to frozen supplied sources', ()
   assert.equal(evaluateAnswerSources(fixture.test_case, fixture.receipt, fixture.review).requested_source_alignment.passed, false);
 });
 
+test('partial answers require opened quoted available sources despite optimistic manual alignment', () => {
+  const fixture = structuredClone(syntheticAnswerSourceFixtures().find(f => f.id === 'missing-requested-source-abstention')!);
+  fixture.receipt.outcome = 'partial';
+  fixture.receipt.answer = 'A critiques the metaphor; B is unavailable, so I cannot finish the comparison.';
+  fixture.receipt.compared_source_ids = ['essay-a'];
+  fixture.receipt.claims = [structuredClone(correctComparison.claims[0]!)];
+  fixture.review.entailment = [{ claim_id: 'critique', supported: true }];
+  fixture.review.requested_source_alignment = true;
+  const score = () => {
+    fixture.review.receipt_sha256 = answerReceiptHash(fixture.receipt);
+    return evaluateAnswerSources(fixture.test_case, fixture.receipt, fixture.review).requested_source_alignment;
+  };
+  assert.equal(score().passed, true, 'A is opened and quoted; missing B is honestly disclosed');
+  fixture.receipt.opened_source_ids = [];
+  assert.equal(score().passed, false, 'A was never opened');
+  fixture.receipt.opened_source_ids = ['essay-a'];
+  fixture.receipt.claims[0]!.citations = [];
+  assert.equal(score().passed, false, 'A is opened but has no citation');
+  const sourceC = explicitComparison.sources[2]!;
+  fixture.receipt.opened_source_ids = ['essay-c'];
+  fixture.receipt.compared_source_ids = ['essay-c'];
+  fixture.receipt.claims[0]!.citations = [{ item_id: sourceC.item_id, quote: sourceC.text }];
+  assert.equal(score().passed, false, 'C has a genuine quotation but substitutes for A');
+  fixture.receipt.opened_source_ids = ['essay-a', 'essay-c'];
+  fixture.receipt.claims[0]!.citations.push(...structuredClone(correctComparison.claims[0]!.citations));
+  assert.equal(score().passed, false, 'adding an A quotation does not make a C comparison valid');
+});
+
+test('abstention needs no positive citation but cannot hide a substituted comparison', () => {
+  const fixture = structuredClone(syntheticAnswerSourceFixtures().find(f => f.id === 'missing-requested-source-abstention')!);
+  fixture.receipt.opened_source_ids = [];
+  fixture.review.receipt_sha256 = answerReceiptHash(fixture.receipt);
+  assert.equal(evaluateAnswerSources(fixture.test_case, fixture.receipt, fixture.review).requested_source_alignment.passed, true);
+  fixture.receipt.compared_source_ids = ['essay-c'];
+  fixture.review.receipt_sha256 = answerReceiptHash(fixture.receipt);
+  assert.equal(evaluateAnswerSources(fixture.test_case, fixture.receipt, fixture.review).requested_source_alignment.passed, false);
+  fixture.receipt.compared_source_ids = [];
+  const sourceC = explicitComparison.sources[2]!;
+  fixture.receipt.claims = [{ claim_id: 'substitute', text: sourceC.text,
+    citations: [{ item_id: sourceC.item_id, quote: sourceC.text }] }];
+  fixture.review.entailment = [{ claim_id: 'substitute', supported: true }];
+  fixture.review.receipt_sha256 = answerReceiptHash(fixture.receipt);
+  assert.equal(evaluateAnswerSources(fixture.test_case, fixture.receipt, fixture.review).requested_source_alignment.passed, false);
+});
+
 test('ambiguous recall keeps intended identities frozen without treating them as explicit instructions', () => {
   const fixture = syntheticAnswerSourceFixtures().find(f => f.id === 'ambiguous-question-silently-substituted')!;
   const result = evaluateAnswerSources(fixture.test_case, fixture.receipt, fixture.review);

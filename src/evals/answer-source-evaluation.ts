@@ -113,12 +113,23 @@ export function evaluateAnswerSources(
     [...intended].every(id => assertedComparison.has(id)) &&
     [...assertedComparison].every(id => intended.has(id) && cited.has(id));
   const trulyUnavailable = [...intended].filter(id => !sources.has(id));
+  const availableIntended = [...intended].filter(id => sources.has(id));
   const honestMissing = receipt.missing_source_ids.length > 0 &&
     unique(receipt.missing_source_ids).length === receipt.missing_source_ids.length &&
     receipt.missing_source_ids.every(id => intended.has(id) && trulyUnavailable.includes(id)) &&
     trulyUnavailable.every(id => receipt.missing_source_ids.includes(id));
+  // A partial answer still needs evidence for every available requested source.
+  // Missing-source disclosure alone cannot excuse unread sources or a substituted comparison.
+  const partialAligned = honestMissing && availableIntended.length > 0 &&
+    availableIntended.every(id => cited.has(id) && assertedComparison.has(id)) &&
+    [...assertedComparison].every(id => availableIntended.includes(id));
+  // Abstention makes no comparison, so it does not require positive source coverage.
+  // Any cited source observations must still concern the requested available sources.
+  const abstentionAligned = honestMissing && assertedComparison.size === 0 &&
+    receipt.claims.every(claim => claim.citations.every(citation => availableIntended.includes(citation.item_id)));
   const identityCheck = receipt.outcome === 'answer' ? aligned :
-    (receipt.outcome === 'partial' || receipt.outcome === 'abstain') ? honestMissing : null;
+    receipt.outcome === 'partial' ? partialAligned :
+      receipt.outcome === 'abstain' ? abstentionAligned : null;
 
   const familyChecks = receipt.family_assertions.map((assertion, index): boolean | null => {
     const ids = unique(assertion.item_ids);

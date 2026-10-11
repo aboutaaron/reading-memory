@@ -7,7 +7,7 @@ import { join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { assign, tick, status } from './lib/dev-manager.mjs';
-import { command, git, openDatabase, rootFor, getAttempt, getState, saveState, saveAttempt, validateContract } from './lib/dev-state.mjs';
+import { command, git, openDatabase, rootFor, getAttempt, getState, saveState, saveAttempt, processIdentity, validateContract } from './lib/dev-state.mjs';
 
 function fixture(t, options = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'dev-run-test-'));
@@ -23,7 +23,7 @@ function fixture(t, options = {}) {
     await new Promise(r=>setTimeout(r,${options.slow ?? 150}));
     if(kind!=='review')fs.writeFileSync('target.txt',kind==='repair'?'2\\n':'1\\n');
     const findings=kind==='review'&&fs.readFileSync('target.txt','utf8').trim()==='1'?['Change target to 2 to meet review acceptance']:[];
-    fs.writeFileSync(process.env.DEV_RUN_OUTPUT,JSON.stringify({summary:'fixture result',candidate:process.env.DEV_RUN_CANDIDATE,approved:kind==='review'&&!findings.length,findings}));
+    fs.writeFileSync(process.env.DEV_RUN_OUTPUT,${options.malformed ? "'not-json'" : "JSON.stringify({summary:'fixture result',candidate:process.env.DEV_RUN_CANDIDATE,approved:kind==='review'&&!findings.length,findings})"});
     console.log(JSON.stringify({type:'thread.started',thread_id:process.env.DEV_RUN_ATTEMPT}));
     console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:2,output_tokens:1}}));`, { mode: 0o700 });
   const gh = join(dir, 'gh-fixture');
@@ -184,4 +184,40 @@ test('foreign remote branch is never pushed over before PR ownership reconciliat
   assert.equal(stopped.control, 'blocked');
   assert.equal(git(f.repo, 'ls-remote', '--heads', 'origin', `refs/heads/${s.branch}`).split(/\s/)[0], s.base_commit);
   assert.equal(existsSync(f.creates), false); assert.notEqual(publishing.candidate, s.base_commit);
+});
+
+test('real supervisor worker deadline terminates the owned child and fails closed', { timeout: 20000 }, async t => {
+  const f = fixture(t, { slow: 20000 }); f.contract.budgets.worker_seconds = 10;
+  const s = await assign(f.contract, f.root); const started = await tick(s.run_dir);
+  let stopped;
+  for (let n = 0; n < 150; n++) { stopped = await tick(s.run_dir); if (stopped.control === 'blocked') break; await delay(100); }
+  assert.equal(stopped.control, 'blocked'); assert.equal(stopped.attempts.length, 1);
+  const a = attempt(s.run_dir, started.attempt);
+  assert.equal(a.status, 'finished'); assert.equal(a.result.reason, 'worker deadline exceeded');
+  assert.notEqual(processIdentity(a.child_pid), a.child_identity, 'owned child is no longer alive');
+  assert.equal((await tick(s.run_dir)).attempts.length, 1);
+});
+
+test('malformed coding result is rejected without committing worker changes', { timeout: 10000 }, async t => {
+  const f = fixture(t, { malformed: true }); const s = await assign(f.contract, f.root); await tick(s.run_dir);
+  let stopped;
+  for (let n = 0; n < 100; n++) { stopped = await tick(s.run_dir); if (stopped.control === 'blocked') break; await delay(50); }
+  assert.equal(stopped.control, 'blocked'); assert.equal(stopped.candidate, null);
+  assert.equal(git(stopped.worktree, 'rev-parse', 'HEAD'), s.base_commit);
+});
+
+test('ready supervisor refuses remote changes after prior CI gate, before external ready mutation', { timeout: 20000 }, async t => {
+  const f = fixture(t); const s = await assign(f.contract, f.root);
+  await until(s.run_dir, x => x.phase === 'readying');
+  const original = JSON.parse(readFileSync(f.pr, 'utf8'));
+  const changes = [{ statusCheckRollup: [] }, { headRefOid: s.base_commit }, { statusCheckRollup: [{ name: 'fixture-ci', status: 'COMPLETED', conclusion: 'FAILURE' }] }];
+  for (const change of changes) {
+    writeFileSync(f.pr, JSON.stringify({ ...original, ...change }));
+    mutate(s.run_dir, x => { x.phase = 'readying'; x.control = 'active'; x.attempt = null; });
+    await tick(s.run_dir);
+    let stopped;
+    for (let n = 0; n < 100; n++) { stopped = await tick(s.run_dir); if (stopped.control === 'blocked') break; await delay(50); }
+    assert.equal(stopped.control, 'blocked');
+    assert.equal(JSON.parse(readFileSync(f.pr, 'utf8')).isDraft, true, 'gh ready never ran');
+  }
 });

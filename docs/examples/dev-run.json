@@ -1,0 +1,57 @@
+{
+  "id": "ledger-verification-example",
+  "approved": true,
+  "objective": "Keep unsuccessful run-ledger verification pending",
+  "repository": "/absolute/path/to/reading-memory",
+  "github": "aboutaaron/reading-memory",
+  "base": "main",
+  "acceptance": [
+    "An explicit failed or pending verification never counts as successful completion.",
+    "Successful verification clears pending actions; legacy events without a status retain their historical meaning.",
+    "Regression tests cover failure, recovery, and completion replay."
+  ],
+  "scope": [
+    "scripts/lib/run-ledger.mjs",
+    "scripts/run-ledger.test.mjs",
+    "scripts/run-ledger-resume.test.mjs",
+    "docs/run-ledgers.md"
+  ],
+  "constraints": [
+    "Do not access the private corpus or production service.",
+    "Do not merge or deploy."
+  ],
+  "authority": {
+    "push": true,
+    "pull_request": true
+  },
+  "tests": [
+    [
+      "npm",
+      "ci"
+    ],
+    [
+      "npm",
+      "test"
+    ],
+    [
+      "npm",
+      "run",
+      "build"
+    ]
+  ],
+  "budgets": {
+    "attempts": 12,
+    "wall_seconds": 7200,
+    "worker_seconds": 900,
+    "tokens": 1000000
+  },
+  "version": 1,
+  "required_checks": [
+    "test (Node 22, umask 022)",
+    "test (Node 22, umask 077)",
+    "test (Node 24, umask 022)",
+    "test (Node 24, umask 077)",
+    "test (Node 26, umask 022)",
+    "test (Node 26, umask 077)"
+  ]
+}

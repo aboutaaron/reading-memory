@@ -127,3 +127,7 @@ For a future morning brief ledger:
 - keep `/brief-events` as the resurfacing ledger for stored corpus items
 
 Run ledgers record operational assembly state. `/brief-events` records durable brief usage for Reading Memory source selection. Do not collapse those responsibilities until two or three real run ledgers prove the event names and promotion path.
+
+## Development orchestration
+
+For explicitly approved development tasks, [persistent development runs](persistent-development.md) extend these ledgers with `custom:dev-transition` events, transactional operational state, supervised Codex workers, and Hermes wakeups. Development state stays outside the corpus and checkout. Use `dev-run status` for its richer worker, ownership, budget, and commit-gate state; the general ledger summary does not interpret custom events.

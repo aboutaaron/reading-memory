@@ -30,6 +30,7 @@ function fixture(t, options = {}) {
   writeFileSync(gh, `#!${process.execPath}\nimport fs from 'node:fs';
     import {execFileSync} from 'node:child_process';
     const args=process.argv.slice(2),file=${JSON.stringify(pr)};
+    if(args[1]==='list'&&process.env.DEV_RUN_KIND==='publish')await new Promise(r=>setTimeout(r,${options.publishDelay ?? 0}));
     let pr=fs.existsSync(file)?JSON.parse(fs.readFileSync(file,'utf8')):null;
     if(args[1]==='list')console.log(JSON.stringify(pr?[pr]:[]));
     else if(args[1]==='view')console.log(JSON.stringify(pr));
@@ -55,6 +56,22 @@ async function until(run, predicate, maximum = 250) {
 }
 function attempt(run, id) { const db = openDatabase(rootFor(run)); try { return getAttempt(db, id); } finally { db.close(); } }
 function mutate(run, fn) { const db = openDatabase(rootFor(run)); try { db.exec('BEGIN IMMEDIATE'); const s = getState(db, run); fn(s, db); saveState(db, s); db.exec('COMMIT'); return s; } finally { db.close(); } }
+async function finishedAttempt(run, id, timeoutMs = 45000) {
+  const db = openDatabase(rootFor(run));
+  const deadline = performance.now() + timeoutMs;
+  let a;
+  try {
+    // Observe the durable worker record without repeatedly acquiring the manager's
+    // write transaction. A CI scheduler delay is not an orchestration transition.
+    while (performance.now() < deadline) {
+      a = getAttempt(db, id);
+      if (a?.status === 'finished') return a;
+      await delay(100);
+    }
+    const s = getState(db, run);
+    assert.fail(`Attempt did not finish within ${timeoutMs}ms: ${JSON.stringify({ id, phase: s.phase, control: s.control, status: a?.status, pid: a?.pid, supervisor_matches: a?.pid ? processIdentity(a.pid) === a.identity : false, child_pid: a?.child_pid, result: a?.result })}`);
+  } finally { db.close(); }
+}
 
 test('simulated end-to-end: killed manager, fresh process, separate review repair and ambiguous PR response', { timeout: 60000 }, async t => {
   const f = fixture(t, { ambiguousCreate: true, slow: 400 });
@@ -174,13 +191,16 @@ test('paused reserved supervisor, uncertain lost identity and exhausted budgets 
   assert.match((await tick(s.run_dir)).blocker, /Attempt budget/);
 });
 
-test('foreign remote branch is never pushed over before PR ownership reconciliation', { timeout: 20000 }, async t => {
-  const f = fixture(t); const s = await assign(f.contract, f.root);
+test('foreign remote branch is never pushed over before PR ownership reconciliation', { timeout: 60000 }, async t => {
+  // Deliberately exceed the old 150 × 50ms polling allowance while remaining
+  // within the approved 30s worker budget, as can happen on a busy CI runner.
+  const f = fixture(t, { publishDelay: 12000 }); const s = await assign(f.contract, f.root);
   const publishing = await until(s.run_dir, x => x.phase === 'publishing');
   git(f.repo, 'push', 'origin', `${s.base_commit}:refs/heads/${s.branch}`);
-  await tick(s.run_dir);
-  let stopped;
-  for (let n = 0; n < 150; n++) { stopped = await tick(s.run_dir); if (stopped.control === 'blocked') break; await delay(50); }
+  const started = await tick(s.run_dir);
+  const completed = await finishedAttempt(s.run_dir, started.attempt);
+  assert.equal(completed.kind, 'publish'); assert.equal(completed.result.ok, false);
+  const stopped = await tick(s.run_dir);
   assert.equal(stopped.control, 'blocked');
   assert.equal(git(f.repo, 'ls-remote', '--heads', 'origin', `refs/heads/${s.branch}`).split(/\s/)[0], s.base_commit);
   assert.equal(existsSync(f.creates), false); assert.notEqual(publishing.candidate, s.base_commit);

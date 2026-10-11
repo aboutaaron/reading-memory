@@ -85,6 +85,48 @@ test('verification events clear pending external actions', async () => {
   assert.equal(state.next_step, 'record completion');
 });
 
+for (const status of ['failed', 'pending', 'skipped', 'custom:needs_review']) {
+  test(`${status} verification keeps an external action pending until recovery`, async (t) => {
+    const root = await mkdtemp(join(tmpdir(), 'run-ledger-'));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const { run_dir: runDir } = await createRunLedger({ root, workflow: 'newsletter_triage', runId: 'verification-status' });
+    await appendRunEvent({ runDir, kind: 'external_action_recorded', payload: { action_id: 'archive_1', action: 'archive' } });
+    await appendRunEvent({ runDir, kind: 'external_action_recorded', payload: { action_id: 'restore_1', action: 'restore' } });
+
+    // Only the latest verification for this action controls its pending state.
+    for (const verificationStatus of [status, 'verified', status, 'verified']) {
+      await appendRunEvent({ runDir, kind: 'verification_recorded', payload: { action_id: 'archive_1', status: verificationStatus } });
+      const state = await deriveRunState(runDir);
+      assert.equal(state.external_actions[0].status, verificationStatus);
+      assert.deepEqual(
+        state.pending_external_actions.map((action) => action.action_id),
+        verificationStatus === 'verified' ? ['restore_1'] : ['archive_1', 'restore_1']
+      );
+      assert.equal(state.status, 'active');
+      assert.equal(state.next_step, 'verify external actions');
+    }
+
+    await appendRunEvent({ runDir, kind: 'verification_recorded', payload: { action_id: 'restore_1', status: 'verified' } });
+    const recovered = await deriveRunState(runDir);
+    assert.equal(recovered.pending_external_actions.length, 0);
+    assert.equal(recovered.next_step, 'record completion');
+  });
+}
+
+test('legacy verification without status still clears pending actions', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'run-ledger-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const { run_dir: runDir } = await createRunLedger({ root, workflow: 'newsletter_triage', runId: 'legacy-verification' });
+  await appendRunEvent({ runDir, kind: 'external_action_recorded', payload: { action_id: 'archive_1', action: 'archive' } });
+  await appendRunEvent({ runDir, kind: 'verification_recorded', payload: { action_id: 'archive_1', status: 'failed' } });
+  await appendRunEvent({ runDir, kind: 'verification_recorded', payload: { action_id: 'archive_1' } });
+
+  const state = await deriveRunState(runDir);
+  assert.equal(state.external_actions[0].status, 'verified');
+  assert.equal(state.pending_external_actions.length, 0);
+  assert.equal(state.next_step, 'record completion');
+});
+
 test('unknown event kinds and raw content fields are rejected', async () => {
   const root = await mkdtemp(join(tmpdir(), 'run-ledger-'));
   const { run_dir: runDir } = await createRunLedger({ root, workflow: 'newsletter_triage', runId: 'triage-4' });

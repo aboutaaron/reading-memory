@@ -221,3 +221,24 @@ test('ready supervisor refuses remote changes after prior CI gate, before extern
     assert.equal(JSON.parse(readFileSync(f.pr, 'utf8')).isDraft, true, 'gh ready never ran');
   }
 });
+
+test('scope checks permit exact nested new files and require both sides of staged renames', { timeout: 15000 }, async t => {
+  for (const scenario of ['new-file', 'allowed-rename', 'outside-source-rename']) {
+    const f = fixture(t);
+    f.contract.scope = scenario === 'outside-source-rename' ? ['nested/new file.mjs'] : ['target.txt', 'nested/new file.mjs'];
+    const s = await assign(f.contract, f.root); const started = await tick(s.run_dir);
+    for (let n = 0; n < 100 && attempt(s.run_dir, started.attempt).status !== 'finished'; n++) await delay(50);
+    assert.equal(attempt(s.run_dir, started.attempt).status, 'finished');
+    mkdirSync(join(started.worktree, 'nested'));
+    if (scenario === 'new-file') writeFileSync(join(started.worktree, 'nested/new file.mjs'), 'export const value = 1;\n');
+    else git(started.worktree, 'mv', 'target.txt', 'nested/new file.mjs');
+    const collected = await tick(s.run_dir);
+    if (scenario === 'outside-source-rename') {
+      assert.equal(collected.control, 'blocked'); assert.match(collected.blocker, /outside the approved scope/);
+      assert.equal(git(started.worktree, 'rev-parse', 'HEAD'), s.base_commit);
+    } else {
+      assert.equal(collected.control, 'active', collected.blocker); assert.equal(collected.phase, 'testing');
+      assert.ok(git(started.worktree, 'ls-tree', '-r', '--name-only', collected.candidate).includes('nested/new file.mjs'));
+    }
+  }
+});

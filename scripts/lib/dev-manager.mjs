@@ -52,8 +52,15 @@ function assertCandidate(s) {
   if (git(s.worktree, 'rev-parse', 'HEAD') !== s.candidate || git(s.worktree, 'status', '--porcelain')) throw new Error('Candidate worktree drifted; refusing stale gates');
 }
 function collect(s) {
-  const paths = git(s.worktree, 'status', '--porcelain', '-z').split('\0').filter(Boolean).map(x => x.slice(3));
-  const all = [...paths, ...git(s.worktree, 'diff', '--name-only', s.base_commit, 'HEAD').split('\n').filter(Boolean)];
+  // NUL-delimited names preserve spaces/newlines. Disable rename folding so both
+  // the removed source and added destination must be inside the approved scope.
+  const names = (...args) => git(s.worktree, ...args).split('\0').filter(Boolean);
+  const paths = [...new Set([
+    ...names('diff', '--name-only', '-z', '--no-renames'),
+    ...names('diff', '--cached', '--name-only', '-z', '--no-renames'),
+    ...names('ls-files', '--others', '--exclude-standard', '-z')
+  ])];
+  const all = [...paths, ...names('diff', '--name-only', '-z', '--no-renames', s.base_commit, 'HEAD')];
   if (all.some(path => !s.contract.scope.some(allowed => allowed.endsWith('/') ? path.startsWith(allowed) : path === allowed))) throw new Error('Worker changed paths outside the approved scope');
   // Workers may not create commits; the manager alone attributes the final candidate.
   const expected = s.candidate ?? s.base_commit;

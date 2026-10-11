@@ -89,7 +89,7 @@ export const RUN_LEDGER_SCHEMA = {
   decisions: RUN_LEDGER_DECISIONS,
   external_actions: RUN_LEDGER_EXTERNAL_ACTIONS,
   statuses: RUN_LEDGER_STATUSES,
-  extension_rule: 'Use custom:<lowercase-slug> for workflow-specific source kinds, decisions, external actions, or statuses.',
+  extension_rule: 'Use custom:<lowercase-slug> for workflow-specific event kinds, source kinds, decisions, external actions, or statuses.',
   privacy: {
     max_string_length: 2000,
     rejected_payload_keys: [...RAW_CONTENT_KEYS].sort()
@@ -311,7 +311,7 @@ export async function readEvents(eventsPath) {
 }
 
 export function assertEventKind(kind) {
-  if (!RUN_LEDGER_EVENTS.includes(kind)) {
+  if (!RUN_LEDGER_EVENTS.includes(kind) && !(typeof kind === 'string' && /^custom:[a-z][a-z0-9_-]{1,63}$/.test(kind))) {
     throw new Error(`Unknown run-ledger event kind: ${kind}`);
   }
 }

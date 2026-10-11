@@ -139,6 +139,19 @@ test('privacy guard rejects documented aliases and nested raw content', async ()
   }
 });
 
+test('custom event kinds survive replay without bypassing vocabulary or privacy checks', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'run-ledger-'));
+  const { run_dir: runDir } = await createRunLedger({ root, workflow: 'development', runId: 'extensions' });
+  await appendRunEvent({ runDir, kind: 'custom:dev-transition', payload: { attempt_id: 'attempt-1', status: 'custom:running' } });
+  assert.equal((await readEvents(join(runDir, 'events.jsonl'))).at(-1).kind, 'custom:dev-transition');
+  assert.equal((await deriveRunState(runDir)).status, 'active');
+  for (const kind of ['custom:', 'custom:Bad', 'custom:a/b', 'custom:a', `custom:${'a'.repeat(65)}`]) {
+    await assert.rejects(appendRunEvent({ runDir, kind }), /Unknown run-ledger event kind/);
+  }
+  await assert.rejects(appendRunEvent({ runDir, kind: 'custom:dev-transition', payload: { nested: { body: 'private' } } }), /raw-content-like/);
+  await assert.rejects(appendRunEvent({ runDir, kind: 'custom:dev-transition', payload: { status: 'running' } }), /status must be/);
+});
+
 test('privacy guard rejects overlong string fields', async () => {
   const root = await mkdtemp(join(tmpdir(), 'run-ledger-'));
   const { run_dir: runDir } = await createRunLedger({ root, workflow: 'newsletter_triage', runId: 'triage-long' });

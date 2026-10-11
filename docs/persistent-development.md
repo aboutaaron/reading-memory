@@ -106,3 +106,5 @@ node "$runtime/scripts/dev-run.mjs" status --run /absolute/run/directory
 ```
 
 Point the Hermes shell launcher at this stable copy. Keep a manifest of the source commit and file hashes with the installation. Upgrade only while the run is paused and no active worker is using the old runtime; preserve the operational root. Repository dependencies are installed by the approved acceptance commands in the isolated worker checkout, not in this six-file manager package.
+
+The [first live trial report](evidence/2026-10-11-persistent-orchestration.md) records the real interruption, worker/review sessions, PR, exact commit, tests, CI, elapsed time, observed usage, and remaining gates.

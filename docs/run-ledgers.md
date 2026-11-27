@@ -60,7 +60,7 @@ The event log is append-only. Use these event names:
 | `decision_recorded` | The agent chose read, skim, done, save, reject, defer, or another workflow decision |
 | `external_action_recorded` | The agent archived, restored, marked done, labeled, or otherwise acted outside Reading Memory |
 | `memory_capture_recorded` | A Reading Memory ingest completed and returned an item id |
-| `verification_recorded` | A previously recorded external action was verified |
+| `verification_recorded` | The verification outcome for an external action was recorded |
 | `run_resumed` | A fresh agent resumed from the ledger |
 | `run_completed` | The workflow finished and verification is complete |
 
@@ -82,6 +82,21 @@ The helper rejects raw-content-like payload keys such as `body`, `text`, `html`,
 
 Use the documented vocabulary exactly. Workflow-specific extensions must use `custom:<lowercase-slug>` so a fresh agent can distinguish deliberate extension from typos or drift.
 
+## Verification Status
+
+For each `action_id`, the latest `verification_recorded` event in log order determines the action's verification status, overriding its recorded action status and earlier verification outcomes:
+
+| Verification `status` | Replay meaning |
+| --- | --- |
+| `verified` | Successful verification; clears the action from pending work |
+| `failed` or `pending` | Unresolved verification; keeps or returns the action to pending work |
+| `skipped` or `custom:<lowercase-slug>` | Does not establish success; the action remains pending |
+| Omitted | Legacy successful verification; retains the historical meaning of `verified` |
+
+Record explicit statuses in new events. A later `verified` outcome clears an earlier failure; a later `failed` or `pending` outcome reopens a previously verified action. Verification only affects the matching `action_id`.
+
+A `run_completed` event or a completed `outputs.json` snapshot cannot clear pending decisions or external actions. Derived status and `run.md` remain `active` with `verify external actions` as the next step while verification is unresolved. The completion timestamp and summary remain as historical metadata. Once successful verification clears the remaining work, replay recognizes the existing completion event, even if `outputs.json` is stale; no second completion event is needed.
+
 ## Newsletter Triage
 
 Use a run ledger before clearing newsletters when the task has more than a couple of messages or when external actions will follow the reading decisions.
@@ -92,7 +107,7 @@ Record:
 2. `decision_recorded` for the reading decision: `read`, `skim`, `done`, `save`, `reject`, or `defer`.
 3. `memory_capture_recorded` with `item_id` when a newsletter is ingested into Reading Memory.
 4. `external_action_recorded` for archive, restore, mark done, or label changes.
-5. `verification_recorded` after confirming the external action actually landed.
+5. `verification_recorded` with `status: verified` after confirming the external action actually landed, or `failed`/`pending` when it remains unresolved.
 6. `run_completed` only after decisions and external actions are verified.
 
 Keep low-signal and rejected newsletters bounded:

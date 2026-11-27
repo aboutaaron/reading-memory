@@ -177,7 +177,7 @@ export async function deriveRunState(runDir) {
   const events = await readEvents(join(runDir, 'events.jsonl'));
   const sources = new Map();
   const externalActions = new Map();
-  const verifiedActionIds = new Set();
+  const verificationStatuses = new Map();
   const capturedItemIds = [];
   let completedAt = outputs.completed_at ?? null;
   let completionSummary = outputs.summary ?? null;
@@ -224,7 +224,9 @@ export async function deriveRunState(runDir) {
 
     if (event.kind === 'verification_recorded') {
       const actionId = stringValue(payload.action_id);
-      if (actionId) verifiedActionIds.add(actionId);
+      // Legacy events omitted status to record success; explicit outcomes replace prior ones.
+      const status = Object.hasOwn(payload, 'status') ? stringValue(payload.status) ?? 'pending' : 'verified';
+      if (actionId) verificationStatuses.set(actionId, status);
     }
 
     if (event.kind === 'run_completed') {
@@ -233,9 +235,9 @@ export async function deriveRunState(runDir) {
     }
   }
 
-  for (const actionId of verifiedActionIds) {
+  for (const [actionId, status] of verificationStatuses) {
     const action = externalActions.get(actionId);
-    if (action) action.status = 'verified';
+    if (action) action.status = status;
   }
 
   const sourceList = [...sources.values()].sort((a, b) => a.source_id.localeCompare(b.source_id));

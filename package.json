@@ -32,6 +32,7 @@
     "reanalyze": "node --import tsx scripts/reanalyze.ts",
     "backfill:titles": "node --import tsx scripts/backfill-titles.ts",
     "run-ledger": "node scripts/run-ledger.mjs",
+    "dev-run": "node scripts/dev-run.mjs",
     "smoke": "tsx scripts/smoke-test.ts",
     "traces": "tsx scripts/inspect-traces.ts",
     "prepare": "npm run build",
